@@ -406,7 +406,16 @@ The rest of the steps are the same.
 |---|---|
 | `zh-TW-HsiaoChenNeural` (default) | female, Microsoft Edge neural voice, online, exact word timing |
 | `zh-TW-HsiaoYuNeural`, `zh-TW-YunJheNeural` | female, male, same service |
-| `say:Meijia`, `say:Flo`, `say:Eddy`, ... | macOS built-in zh_TW voices, offline, word timing estimated |
+| `say:Meijia`, `say:Flo`, `say:Eddy`, ... | macOS zh_TW voices, offline, word timing estimated |
+
+`voices` lists the macOS zh_TW voices installed on this Mac, including
+Enhanced and Premium ones the user downloaded in System Settings >
+Accessibility > Spoken Content > System Voice > Manage Voices (for example
+`say:Meijia (Premium)`). Those sound much better than the basic ones.
+
+`"pitch": -20` in `video.json` makes a zh-TW voice lower (in Hz, -50 to 50;
+`say --pitch` to try it). `speed` and `pace` set how fast it speaks. Neither
+voice family has emotion styles.
 
 The Edge voices need internet and the `edge-tts` Python package. explainroo
 runs it through `uv` with a pinned version when `uv` is installed, or through
@@ -416,19 +425,45 @@ the first time, and use a `say:` voice if they want everything offline.
 `doctor` shows which one works. `speed` defaults to 1 for these voices.
 
 **Writing the narration.** Write the way a Taiwanese person explains
-something to a friend: 口語、短句、一句一個重點.
+something to a friend: 口語、短句、一句一個重點. Read it aloud in your head
+as a Taiwanese speaker would.
 
-- Use Taiwan words: 影片 (not 視頻), 軟體, 硬體, 網路, 資訊, 品質, 螢幕, 預設,
-  伺服器, 滑鼠, 資料夾, 飛彈, 雷射, 列印. `check` warns about Simplified
-  characters and common mainland words in script.md and scenes.js.
+Tone and words:
+
+- Talk to the viewer as 你. A question pulls them in: 「你有沒有想過……？」
+- Use Taiwanese spoken connectors: 所以、不過、結果、其實、而且. Use 然後
+  rarely; it becomes filler.
+- Sentence particles (喔、啦、耶、吧、齁、欸) sound Taiwanese and the voice
+  reads them well. Use one or two per scene, not on every sentence, and not
+  in the last sentence of the video.
+- Taiwan words: 影片 (not 視頻), 軟體, 硬體, 網路, 資訊, 品質, 螢幕, 預設,
+  伺服器, 滑鼠, 資料夾, 飛彈, 雷射, 列印, 蠻, 超. Not mainland spoken words
+  (咱們、啥、咋、唄、忽悠) and not written style (此、其、亦、乃、即).
 - Write numbers so they read naturally. A digit run is fine
   (`1976 年 7 月`); for units, write the spoken form: `七到十九兆赫`,
   `一百五十公尺`. Use `{shown|spoken}` for Latin names the voice should say
   in Chinese: `{Duga|杜加}`, and for a 破音字 the voice gets wrong.
-- Spaces between Chinese characters (for example around a `[#marker]`) are
-  ignored. Keep a space between Chinese and Latin words.
-- About 4 to 5 characters per second at pace 1. A three minute video is
-  roughly 750 characters.
+
+Pace and pauses. Pieces of 10 to 20 characters between punctuation; `check`
+hints at runs over 30. The voice speaks about 4 to 5 characters a second at
+pace 1, so a three minute video is roughly 750 characters. Use pace 1 to 1.1
+for explainers and 1.15 to 1.25 for short, fast social videos. The
+punctuation sets the rhythm (measured with the Edge voices):
+
+| Write | You get |
+|---|---|
+| ，or —— | a short breath, about 0.4 s |
+| 、 | a very short break between list items |
+| 。！？ | the end of a sentence; explainroo adds `sentenceGap` (0.3 s) |
+| …… | trailing off; explainroo adds a 0.5 s pause (the voice alone barely stops) |
+| ～ | a casual tone mark; not read aloud and no pause |
+| `[pause 0.8]` | a deliberate beat before a reveal |
+
+Use full-width punctuation (，。？！：；) next to Chinese, 「」 for quotes
+(『』 inside), and …… (two characters) for trailing off. `check` warns about
+half-width punctuation, “” quotes and a single … or ... in Chinese text.
+Spaces between Chinese characters (for example around a `[#marker]`) are
+ignored. Keep a space between Chinese and Latin words.
 
 **English subtitles.** Put `[en: ...]` after a sentence to show its English
 line under the Chinese caption:

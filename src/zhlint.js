@@ -25,7 +25,7 @@ const MAINLAND = {
   数据: '資料', 文件夾: '資料夾', 鼠標: '滑鼠', 激光: '雷射', 導彈: '飛彈', 打印: '列印',
   優化: '最佳化', 菜單: '選單', 用戶: '使用者', 內存: '記憶體', 芯片: '晶片',
   博客: '部落格', 短信: '簡訊', 出租車: '計程車', 土豆: '馬鈴薯', 自行車: '腳踏車', 互聯網: '網際網路',
-  牛逼: '厲害', 搞定: '完成', 靠譜: '可靠', 給力: '厲害', 點贊: '按讚', 視屏: '影片',
+  咱們: '我們', 啥: '什麼', 咋: '怎麼', 忽悠: '唬弄', 溜達: '散步', 牛逼: '厲害', 搞定: '完成', 靠譜: '可靠', 給力: '厲害', 點贊: '按讚', 視屏: '影片',
 };
 
 export function zhIssues(project, scenesSource = '') {
@@ -42,10 +42,31 @@ export function zhIssues(project, scenesSource = '') {
     if (simp.length) issues.push({ level: 'warn', scene, t: null, message: `${where} has Simplified characters: ${simp.slice(0, 12).map((c) => `${c}→${SIMPLIFIED[c]}`).join(' ')}; write Traditional Chinese (繁體中文)` });
   };
   for (const sc of project.script.scenes) {
-    scan(sc.units.filter((u) => u.type === 'word').map((u) => u.display + u.spoken).join(''), 'the narration', sc.id);
+    const narration = sc.units.filter((u) => u.type === 'word').map((u) => u.display + u.spoken).join('');
+    scan(narration, 'the narration', sc.id);
+    issues.push(...punctuationIssues(sc), ...lengthIssues(sc));
   }
   // Only the strings in scenes.js, not the code around them.
   const strings = (scenesSource.match(/(['"`])(?:\\.|(?!\1).)*\1/g) || []).join(' ');
   scan(strings, 'scenes.js');
   return issues;
+}
+
+// Taiwanese writing uses full-width punctuation next to Chinese, 「」 for quotes
+// and …… for trailing off. The voice reads both the same, but captions show them.
+function punctuationIssues(sc) {
+  const text = sc.text;
+  const issues = [];
+  const add = (message) => issues.push({ level: 'warn', scene: sc.id, t: null, message });
+  const half = [...text.matchAll(/(?<=\p{Script=Han})[,.?!:;]|[,.?!:;](?=\p{Script=Han})/gu)].map((m) => m[0]);
+  if (half.length) add(`half-width punctuation next to Chinese (${[...new Set(half)].join(' ')}); use full-width ，。？！：；`);
+  if (/[“”"](?=\p{Script=Han})|(?<=\p{Script=Han})[“”"]/u.test(text)) add('use 「」 for quotes in Chinese, and 『』 inside them');
+  if (/(?<!…)…(?!…)|\.\.\.|。。/.test(text) && /\p{Script=Han}/u.test(text)) add('write a trailing-off pause as ……, two characters; it gets a 0.5 s pause');
+  return issues;
+}
+
+// Spoken Taiwanese keeps sentences short; a long stretch with no comma is hard to follow.
+function lengthIssues(sc) {
+  const runs = sc.text.split(/[，。！？、；：……—\s]+/).filter((r) => [...r.matchAll(/\p{Script=Han}/gu)].length > 30);
+  return runs.length ? [{ level: 'hint', scene: sc.id, t: null, message: `"${runs[0].slice(0, 16)}…" runs over 30 characters without a pause; Taiwanese narration reads better in 10 to 20 character pieces` }] : [];
 }

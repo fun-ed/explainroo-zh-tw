@@ -8,17 +8,29 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { ffmpegPath } from './ffmpeg.js';
 
-export const ZH_VOICES = {
+const EDGE_VOICES = {
   'zh-TW-HsiaoChenNeural': 'Taiwan Mandarin, female (Edge, online, exact word timing)',
   'zh-TW-HsiaoYuNeural': 'Taiwan Mandarin, female (Edge, online, exact word timing)',
   'zh-TW-YunJheNeural': 'Taiwan Mandarin, male (Edge, online, exact word timing)',
-  'say:Meijia': 'Taiwan Mandarin, female (macOS, offline, estimated word timing)',
-  'say:Flo': 'Taiwan Mandarin, female (macOS, offline, estimated word timing)',
-  'say:Sandy': 'Taiwan Mandarin, female (macOS, offline, estimated word timing)',
-  'say:Shelley': 'Taiwan Mandarin, female (macOS, offline, estimated word timing)',
-  'say:Eddy': 'Taiwan Mandarin, male (macOS, offline, estimated word timing)',
-  'say:Reed': 'Taiwan Mandarin, male (macOS, offline, estimated word timing)',
-  'say:Rocko': 'Taiwan Mandarin, male (macOS, offline, estimated word timing)',
+};
+
+// The zh_TW voices installed on this Mac, including Enhanced and Premium ones
+// downloaded in System Settings: { "say:Meijia (Premium)": "Meijia (Premium)" }.
+function installedSayVoices() {
+  if (process.platform !== 'darwin') return {};
+  const r = spawnSync('say', ['-v', '?'], { encoding: 'utf8' });
+  const out = {};
+  for (const line of String(r.stdout || '').split('\n')) {
+    const m = /^(.+?)\s+zh_TW\s+#/.exec(line);
+    if (m) out[`say:${m[1].trim().replace(/ \(Chinese \(Taiwan\)\)$/, '')}`] = m[1].trim();
+  }
+  return out;
+}
+export const SAY_VOICES = installedSayVoices();
+
+export const ZH_VOICES = {
+  ...EDGE_VOICES,
+  ...Object.fromEntries(Object.keys(SAY_VOICES).map((k) => [k, 'Taiwan Mandarin (macOS, offline, estimated word timing)'])),
 };
 export const ZH_DEFAULT_VOICE = 'zh-TW-HsiaoChenNeural';
 const EDGE_TTS_VERSION = '7.2.8';
@@ -26,7 +38,7 @@ const SAMPLE_RATE = 24000;
 const HAN = /\p{Script=Han}/u;
 
 export function isZhVoice(voice) {
-  return voice in ZH_VOICES;
+  return voice in ZH_VOICES || voice.startsWith('say:');
 }
 
 // The Python that runs scripts/edge_tts.py: $EXPLAINROO_PYTHON, a python3
@@ -50,14 +62,19 @@ function decode(file) {
 }
 
 // Returns { audio: Float32Array at 24 kHz, boundaries: [{ text, start, end }], approximate }.
-export async function zhSpeak(text, voice, speed = 1) {
+// `pitch` moves the voice up or down, in Hz.
+export async function zhSpeak(text, voice, speed = 1, pitch = 0) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'explainroo-zh-'));
   try {
     if (voice.startsWith('say:')) {
-      const name = voice.slice(4) === 'Meijia' ? 'Meijia' : `${voice.slice(4)} (Chinese (Taiwan))`;
+      const name = SAY_VOICES[voice];
+      if (!name) throw new Error(`macOS voice "${voice.slice(4)}" is not installed. Run "explainroo voices" for the installed ones, or download it in System Settings > Accessibility > Spoken Content > System Voice > Manage Voices`);
       const out = path.join(dir, 'say.aiff');
       // ponytail: 190 words a minute is a guess at the macOS default; tune with "speed".
-      const r = spawnSync('say', ['-v', name, '-r', String(Math.round(190 * speed)), '-o', out, text], { encoding: 'utf8' });
+      // ponytail: one pbas step is about 6 Hz on Meijia (measured: +10 -> +83 Hz, -10 -> -53 Hz); other voices may differ.
+      const steps = Math.round(pitch / 6);
+      const said = steps ? `[[pbas ${steps > 0 ? '+' : ''}${steps}]]${text}` : text;
+      const r = spawnSync('say', ['-v', name, '-r', String(Math.round(190 * speed)), '-o', out, said], { encoding: 'utf8' });
       if (r.status !== 0) throw new Error(`macOS say failed for voice "${name}": ${r.stderr || 'is this a Mac with that voice installed?'}`);
       return { audio: decode(out), boundaries: [], approximate: true };
     }
@@ -67,7 +84,7 @@ export async function zhSpeak(text, voice, speed = 1) {
     const script = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'scripts', 'edge_speak.py');
     let r;
     for (let attempt = 0; attempt < 3; attempt++) {
-      r = spawnSync(cmd, [...pre, script, voice, `${pct >= 0 ? '+' : ''}${pct}%`, out], { input: text, encoding: 'utf8', maxBuffer: 1 << 26 });
+      r = spawnSync(cmd, [...pre, script, voice, `${pct >= 0 ? '+' : ''}${pct}%`, out, `${pitch >= 0 ? '+' : ''}${Math.round(pitch)}Hz`], { input: text, encoding: 'utf8', maxBuffer: 1 << 26 });
       if (r.status === 0) break;
       await new Promise((ok) => setTimeout(ok, 1500 * (attempt + 1)));
     }

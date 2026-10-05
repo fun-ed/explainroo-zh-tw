@@ -22,6 +22,7 @@ function sceneHash(scene, chunks, config) {
       dtype: ttsDtype(),
       voice: config.voice,
       speed: config.speed * config.pace,
+      pitch: config.pitch || 0,
       chunks: chunks.map((c) => [c.gapBefore, c.text]),
       // Markers and the shown text of each word are saved with the timings,
       // so moving a [#marker] or changing {shown|spoken} makes the scene again.
@@ -108,7 +109,7 @@ async function synthesizeScene(project, scene, chunks, hash, tts, log) {
     }
     const zh = isZhVoice(config.voice);
     // Chinese voices report when each word is spoken, so no Whisper pass.
-    const spoken = zh ? await zhSpeak(chunk.text, config.voice, config.speed * config.pace) : null;
+    const spoken = zh ? await zhSpeak(chunk.text, config.voice, config.speed * config.pace, config.pitch || 0) : null;
     const audio = zh ? spoken.audio : (await tts.generate(chunk.text, { voice: config.voice, speed: config.speed * config.pace })).audio;
     const samples = trimSilence(audio, sr);
     const trimmed = (samples.byteOffset - audio.byteOffset) / 4 / sr;

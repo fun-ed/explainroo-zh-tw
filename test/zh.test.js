@@ -49,3 +49,27 @@ test('the Taiwan check finds Simplified characters and mainland words', () => {
   assert.match(msgs, /这→這/);
   assert.match(msgs, /軟件.*軟體/);
 });
+
+test('pitch is a zh-TW voice setting in Hz', async () => {
+  const { normalizeConfig } = await import('../src/project.js');
+  assert.equal(normalizeConfig({ voice: 'zh-TW-HsiaoChenNeural', pitch: -20 }).pitch, -20);
+  assert.throws(() => normalizeConfig({ voice: 'zh-TW-HsiaoChenNeural', pitch: 80 }), /pitch must be/);
+  assert.throws(() => normalizeConfig({ voice: 'af_heart', pitch: 10 }), /only works with the zh-TW voices/);
+});
+
+test('a trailing-off …… pauses longer and keeps the English line on its sentence', () => {
+  const sc = parseScript('## a\n這個……其實很簡單。[en: This is simple.] 結果——它爆炸了。\n').scenes[0];
+  assert.deepEqual(sc.subs, { 0: 'This is simple.' });
+  const chunks = speechChunks(sc.units, { sentenceGap: 0.3 });
+  assert.deepEqual(chunks.map((c) => [c.gapBefore, c.text]), [[0, '這個……'], [0.5, '其實很簡單。'], [0.3, '結果——它爆炸了。']]);
+});
+
+test('the Taiwan check flags half-width punctuation, quotes and mainland slang', () => {
+  const project = { script: parseScript('## a\n咱們看看,這是啥.他說"好"...\n') };
+  const msgs = zhIssues(project, '').map((i) => i.message).join('\n');
+  assert.match(msgs, /咱們.*我們/);
+  assert.match(msgs, /啥.*什麼/);
+  assert.match(msgs, /half-width punctuation/);
+  assert.match(msgs, /「」/);
+  assert.match(msgs, /……/);
+});

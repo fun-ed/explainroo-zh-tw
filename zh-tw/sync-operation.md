@@ -101,9 +101,9 @@ node bin/explainroo.js still videos/sync-zh steps@5
 | 檔案 | 我們改了什麼 | 衝突時怎麼處理 |
 |---|---|---|
 | `src/script.js` | `HAN`、`ZH_PIECE`、`SENTENCE_END` 常數；`normWord` 保留漢字；`tokenizeNarration` 逐字切中文、`[en:]` 單元、中文之間不加空格；`parseScript` 產生 `sent` 和 `subs`；`speechChunks` 中文不加空格 | 最容易衝突。保留上游的新邏輯，再把這幾處加回去。`test/zh.test.js` 第一個測試會抓到漏掉的地方 |
-| `src/voice.js` | `PIPELINE` 版本號加 1；中文語音不用 Kokoro 和 Whisper；words 帶 `space` 和 `sent` | `PIPELINE` 取「上游值＋1」，讓語音快取重建 |
+| `src/voice.js` | `PIPELINE` 版本號加 1；hash 包含 `pitch`；中文語音不用 Kokoro 和 Whisper；words 帶 `space` 和 `sent` | `PIPELINE` 取「上游值＋1」，讓語音快取重建 |
 | `src/models.js` | `VOICES` 合併 `ZH_VOICES` | 上游新增語音時，保留 `...ZH_VOICES` 這一行 |
-| `src/project.js` | zh 語音預設 `speed` 為 1 | 只有一行 |
+| `src/project.js` | zh 語音預設 `speed` 為 1；`pitch` 預設值和檢查 | 幾行，`DEFAULTS` 裡的 `pitch: 0` 別漏掉 |
 | `src/qa.js` | `check` 呼叫 `zhIssues`；`verify` 對中文語音跳過英文語音檢查 | 保留兩個 `isZhVoice` 判斷 |
 | `src/timeline.js` | words 帶 `space` 和 `sent`；scene 帶 `subs` | 只有兩行 |
 | `src/cli.js` | `init --lang zh-TW`、`say` 支援 zh、`doctor` 檢查 edge-tts、`voices` 欄寬 | 上游改 CLI 時重新套用 |

@@ -37,7 +37,7 @@ Images (optional, needs an OpenRouter API key)
   images [project]      list generated images and what they cost
 
 Reference
-  voices                list voices; "explainroo say 'text' --voice am_michael" to hear one
+  voices                list voices (and the zh_TW voices installed on this Mac); "explainroo say 'text' --voice am_michael" to hear one
   themes                list looks
   formats               list sizes for YouTube, Shorts, TikTok, Reels, Instagram, LinkedIn
   icons <word…>         search the 1,800+ built-in icons
@@ -283,13 +283,13 @@ async function preview(dir, flags, log) {
 }
 
 async function say(text, flags, log, print) {
-  if (!text) throw new ProjectError('usage: explainroo say "text to speak" [--voice af_heart] [--speed 1] [--out sample.wav]');
+  if (!text) throw new ProjectError('usage: explainroo say "text to speak" [--voice af_heart] [--speed 1] [--pitch 0 (Hz, zh-TW voices)] [--out sample.wav]');
   const voice = flags.voice || 'af_heart';
   if (!VOICES[voice]) throw new ProjectError(`voice "${voice}" does not exist. Run "explainroo voices".`);
   const speed = num(flags.speed, 'speed') ?? 1;
   const out = path.resolve(flags.out || `${voice.replace(/[^\w-]/g, '_')}.wav`);
   if (isZhVoice(voice)) {
-    writeWav(out, (await zhSpeak(text, voice, speed)).audio, TTS_SAMPLE_RATE);
+    writeWav(out, (await zhSpeak(text, voice, speed, num(flags.pitch, 'pitch') ?? 0)).audio, TTS_SAMPLE_RATE);
   } else {
     const tts = await loadTTS({ log });
     const audio = await tts.generate(text, { voice, speed });

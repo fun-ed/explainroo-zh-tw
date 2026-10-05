@@ -11,6 +11,13 @@ const HAN = /\p{Script=Han}/u;
 // A Han character (with the punctuation around it) is one word; other runs stay whole.
 const ZH_PIECE = /[「『（《〈“‘]*\p{Script=Han}|[^\p{Script=Han}「『（《〈“‘]+|[「『（《〈“‘]+$/gu;
 const SENTENCE_END = /[.!?…。！？]["'’)\]」』）”]*$/;
+// An [en: ...] subtitle belongs to a whole sentence, so a "……" inside one does not end it.
+const SUBTITLE_END = /[.!?。！？]["'’)\]」』）”]*$/;
+// Edge barely pauses at a Chinese "……" (0.13 s measured, less than a comma), but a
+// Taiwanese speaker trails off there, so the narration gets a real pause.
+// ponytail: fixed 0.5 s; make it a setting if videos need a different beat.
+const TRAILING_OFF = /(……|⋯⋯)["'’)\]」』）”]*$/;
+const TRAILING_OFF_GAP = 0.5;
 const ATTR_NUMBERS = new Set(['hold', 'min', 'lead', 'gap', 'max']);
 
 export class ScriptError extends Error {
@@ -58,7 +65,7 @@ export function tokenizeNarration(text, line = 0) {
   const n = text.length;
   const pushWord = (display, spoken) => {
     const prev = units[units.length - 1];
-    if (!pendingSpace && prev && prev.type === 'word' && /^[.,;:!?)\]"'’…，。！？、；：」』）》〉”]+$/.test(display)) {
+    if (!pendingSpace && prev && prev.type === 'word' && /^[.,;:!?)\]"'’…，。！？、；：」』）》〉”—～~⋯]+$/.test(display)) {
       prev.display += display;
       prev.spoken += spoken;
       return;
@@ -205,7 +212,7 @@ export function parseScript(source) {
         if (u.type === 'word') {
           if (ended) sent++;
           u.sent = sent;
-          ended = SENTENCE_END.test(u.display);
+          ended = SUBTITLE_END.test(u.display);
         } else if (u.type === 'sub') subs[sent] = u.text;
       }
       return {
@@ -251,7 +258,7 @@ export function speechChunks(units, { sentenceGap = 0.3, paragraphGap = 0.55, pa
     cur.words.push({ unitIndex: index, display: u.display, spoken: u.spoken });
     if (SENTENCE_END.test(u.spoken)) {
       close();
-      gapBefore = sentenceGap / pace;
+      gapBefore = (TRAILING_OFF.test(u.spoken) ? Math.max(sentenceGap, TRAILING_OFF_GAP) : sentenceGap) / pace;
     }
   });
   close();

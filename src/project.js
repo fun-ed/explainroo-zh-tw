@@ -37,6 +37,7 @@ export const DEFAULTS = {
   fps: 30,
   voice: 'af_heart',
   speed: 0.9,
+  pitch: 0,
   pace: 1,
   music: true,
   sfx: true,
@@ -89,6 +90,8 @@ export function normalizeConfig(raw) {
   // Edge and macOS voices speak at a natural pace at 1; Kokoro's default is 0.9.
   if (isZhVoice(cfg.voice) && raw.speed === undefined) cfg.speed = 1;
   if (!(cfg.speed >= 0.6 && cfg.speed <= 1.6)) fail('speed must be between 0.6 and 1.6');
+  if (!(Number.isInteger(cfg.pitch) && cfg.pitch >= -50 && cfg.pitch <= 50)) fail('pitch must be a whole number of Hz between -50 and 50 (0 is the voice as it is)');
+  if (cfg.pitch && !isZhVoice(cfg.voice)) fail('pitch only works with the zh-TW voices (Edge and macOS); Kokoro voices have no pitch setting');
   if (!(cfg.pace >= 0.7 && cfg.pace <= 1.6)) fail('pace must be between 0.7 and 1.6 (1 is normal, 1.3 is 30% faster)');
   if (cfg.speed * cfg.pace > 1.8) fail(`speed ${cfg.speed} times pace ${cfg.pace} makes the voice too fast; keep speed x pace at 1.8 or below`);
   if (![24, 25, 30, 50, 60].includes(cfg.fps)) fail('fps must be 24, 25, 30, 50 or 60');

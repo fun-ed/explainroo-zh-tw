@@ -89,9 +89,9 @@ node bin/explainroo.js still videos/sync-zh steps@5
 
 | 檔案 | 內容 |
 |---|---|
-| `src/zhvoice.js` | zh-TW 語音、Edge 和 macOS say、逐字對齊 `alignChars` |
-| `src/zhlint.js` | 簡體字和中國用語檢查 |
-| `scripts/edge_speak.py` | 呼叫 edge-tts 並輸出斷詞時間。檔名不能叫 `edge_tts.py`，否則會蓋掉套件名稱 |
+| `src/zhvoice.js` | zh-TW 語音、偵測這台 Mac 已安裝的 zh_TW 語音（`SAY_VOICES`）、Edge 和 macOS say、`pitch`、逐字對齊 `alignChars` |
+| `src/zhlint.js` | 簡體字、中國用語、半形標點、引號、刪節號、長句檢查 |
+| `scripts/edge_speak.py` | 呼叫 edge-tts（參數：voice、rate、輸出檔、pitch）並輸出斷詞時間。檔名不能叫 `edge_tts.py`，否則會蓋掉套件名稱 |
 | `templates/starter-zh/` | 繁中範本 |
 | `test/zh.test.js` | 中文相關測試 |
 | `zh-tw/` | fork 的維護文件 |
@@ -100,13 +100,13 @@ node bin/explainroo.js still videos/sync-zh steps@5
 
 | 檔案 | 我們改了什麼 | 衝突時怎麼處理 |
 |---|---|---|
-| `src/script.js` | `HAN`、`ZH_PIECE`、`SENTENCE_END` 常數；`normWord` 保留漢字；`tokenizeNarration` 逐字切中文、`[en:]` 單元、中文之間不加空格；`parseScript` 產生 `sent` 和 `subs`；`speechChunks` 中文不加空格 | 最容易衝突。保留上游的新邏輯，再把這幾處加回去。`test/zh.test.js` 第一個測試會抓到漏掉的地方 |
+| `src/script.js` | `HAN`、`ZH_PIECE`、`SENTENCE_END`、`SUBTITLE_END`、`TRAILING_OFF` 常數；`normWord` 保留漢字；`tokenizeNarration` 逐字切中文、`[en:]` 單元、中文之間不加空格；`parseScript` 產生 `sent` 和 `subs`；`speechChunks` 中文不加空格、`……` 後停 0.5 秒；標點附著清單加了 `—～~⋯` | 最容易衝突。保留上游的新邏輯，再把這幾處加回去。`test/zh.test.js` 第一個測試會抓到漏掉的地方 |
 | `src/voice.js` | `PIPELINE` 版本號加 1；hash 包含 `pitch`；中文語音不用 Kokoro 和 Whisper；words 帶 `space` 和 `sent` | `PIPELINE` 取「上游值＋1」，讓語音快取重建 |
 | `src/models.js` | `VOICES` 合併 `ZH_VOICES` | 上游新增語音時，保留 `...ZH_VOICES` 這一行 |
 | `src/project.js` | zh 語音預設 `speed` 為 1；`pitch` 預設值和檢查 | 幾行，`DEFAULTS` 裡的 `pitch: 0` 別漏掉 |
 | `src/qa.js` | `check` 呼叫 `zhIssues`；`verify` 對中文語音跳過英文語音檢查 | 保留兩個 `isZhVoice` 判斷 |
 | `src/timeline.js` | words 帶 `space` 和 `sent`；scene 帶 `subs` | 只有兩行 |
-| `src/cli.js` | `init --lang zh-TW`、`say` 支援 zh、`doctor` 檢查 edge-tts、`voices` 欄寬 | 上游改 CLI 時重新套用 |
+| `src/cli.js` | `init --lang zh-TW`、`say` 支援 zh 和 `--pitch`、`doctor` 檢查 edge-tts、`voices` 欄寬、HELP 文字 | 上游改 CLI 時重新套用 |
 | `engine/captions.js` | `visualLength`、`captionText`、雙語第二行、`gaps` | 上游改字幕繪製時要整段重新檢查 |
 | `engine/text.js` | `parseRich` 遇到漢字逐字切開；`layoutText` 中文字之間不加間距（`tight`） | |
 | `engine/util.js`、`engine/stage.js` | `normWord` 保留漢字；新增 `cueTokens`；`_cue` 改用它 | |

@@ -7,6 +7,10 @@
 
 ## [Unreleased]
 
+## [0.1.1-zh.2] - 2026-10-05
+
+基於上游 `0.1.1`（commit `5347905`），fork commit `cfb70d8`、`bdcdd02`，以及這次的文件對齊。
+
 ### Fixed
 - 句子中間有 `……` 時，`[en:]` 英文字幕會對到下一句。現在只有句號、問號、驚嘆號會結束一句。
 
@@ -18,6 +22,7 @@
 - `voices` 會自動偵測這台 Mac 已安裝的 zh_TW 語音，包括 Enhanced 和 Premium 版本（`say:Meijia (Premium)` 等）。
 
 ### Changed
+- AGENTS.md、sync-operation.md、TASKS.md 和 prompt 範本都跟程式對齊：設定表加上 `pitch`，`init` 寫上 `--lang zh-TW`，`voices` 的說明、watermark 預設值、衝突熱點表都更新了。
 - README.md 改寫成精簡的中英雙語版本，內容包括安裝、會安裝哪些東西、純中文和中英雙語的用法，以及中文影片的小技巧。原本的 README.zh-TW.md 合併進來後刪除。
 - 確認純中文影片完全不需要英文語音模型（約 400 MB）。
 

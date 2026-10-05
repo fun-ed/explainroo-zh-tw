@@ -554,7 +554,7 @@ Shorts, TikTok and Reels it sits in the top right corner, because the app
 covers the bottom one. The user can turn it off with `"watermark": false` in
 `video.json`, or change it to their own text. If the user asks about it, tell
 them it is their choice, and that keeping it helps more people find this free
-project.
+project. Projects made with `--lang zh-TW` start with the watermark off.
 
 ## Project files and settings
 
@@ -576,8 +576,9 @@ videos/<name>/
 | `theme` | `paper` | `paper`, `clean`, `chalk`, `blueprint`, `midnight` |
 | `size` | `16:9` | a platform (`youtube`, `shorts`, `tiktok`, `reels`, `vertical`, `instagram`, `linkedin`, `square`), `16:9`, `9:16`, `1:1`, `4:5` or `WIDTHxHEIGHT` |
 | `fps` | 30 | 24, 25, 30, 50 or 60 |
-| `voice` | `af_heart` | see `explainroo voices` |
-| `speed` | 0.9 | voice speed only, 0.6 to 1.6 |
+| `voice` | `af_heart` | see `explainroo voices`; zh-TW voices in [Traditional Chinese (Taiwan) videos](#traditional-chinese-taiwan-videos) |
+| `speed` | 0.9 (1 for zh-TW voices) | voice speed only, 0.6 to 1.6 |
+| `pitch` | 0 | zh-TW voices only: higher or lower, in Hz, -50 to 50 |
 | `pace` | 1 | speed of the whole video (voice, pauses, animations), 0.7 to 1.6 |
 | `music` | `true` | `true` (the look's style), `warm`, `upbeat`, `calm`, `tech`, `playful`, `{ "style", "volume" }` or `false` |
 | `sfx` | `true` | sound effects: `true`, `"minimal"` or `false` |
@@ -587,7 +588,7 @@ videos/<name>/
 | `sentenceGap`, `paragraphGap` | 0.3, 0.55 | pauses in the narration |
 | `loudness` | -14 | target loudness in LUFS |
 | `boil` | 0 | redraws per second of hand-drawn lines; 0 keeps them still |
-| `watermark` | `"explainroo.com"` | small text in a corner, or `false` |
+| `watermark` | `"explainroo.com"` (`false` with `--lang zh-TW`) | small text in a corner, or `false` |
 | `images` | none | `{ "model": "best" or "cheap", "style": "..." }` |
 | `brand` | none | colors, fonts and logo for `s.ui`, see [Product demos](#product-demos) |
 | `fonts` | none | the video's own font files, see [Product demos](#product-demos) |
@@ -606,7 +607,7 @@ The looks:
 
 | Command | What it does |
 |---|---|
-| `init <dir>` | creates a project (`--theme`, `--size`, `--pace`, `--voice`, `--title`) |
+| `init <dir>` | creates a project (`--theme`, `--size`, `--pace`, `--voice`, `--title`, `--lang zh-TW`) |
 | `voice [project]` | makes the narration and the word times, saved per scene so only changed scenes are made again |
 | `preview [project]` | a live preview in the browser that reloads when you save |
 | `still [project] [times]` | PNG pictures at `12.5`, `scene`, `scene@2.4` or `scene@end` |
@@ -616,7 +617,7 @@ The looks:
 | `verify [project]` | checks the finished file: loudness, black frames, silence, clear voice |
 | `image [project] <name> "<prompt>"` | makes an illustration with OpenRouter |
 | `images [project]` | lists the images and what they cost |
-| `voices`, `say "text"` | lists the 28 voices, or makes a sample |
+| `voices`, `say "text"` | lists the voices (28 English, 3 Edge zh-TW, and the macOS zh_TW voices installed), or makes a sample (`--voice`, `--speed`, `--pitch`) |
 | `themes`, `formats`, `icons <word>` | lists the looks and the sizes, searches the 1,854 icons |
 | `doctor` | checks the setup (`--fetch` downloads the speech models) |
 

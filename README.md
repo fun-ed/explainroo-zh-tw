@@ -118,6 +118,7 @@ node bin/explainroo.js render videos/demo   # 輸出 videos/demo/out/video.mp4
 - 自動發音檢查只懂英文。中文影片 render 完要自己聽一遍。
 - 簡體字和中國用語的檢查只用常見字表，不是完整的轉換器。
 - 中文字型依賴系統：macOS 用 PingFang TC，Linux 請裝 Noto Sans TC（`fonts-noto-cjk`）。
+- 台灣語音沒有情緒風格（例如開心、嚴肅），語氣只能靠用詞、標點、`pitch` 和速度來調。
 
 ### 7. 維護文件
 
@@ -169,6 +170,7 @@ node bin/explainroo.js render videos/demo-zh                            # -> out
 - Chinese videos: Edge zh-TW neural voices send the narration text to Microsoft's speech service.
   `"voice": "say:Meijia"` stays offline on macOS, with estimated word timing.
 - Bilingual captions: write `[en: ...]` after each Chinese sentence.
+- Voice tuning for zh-TW: `"pitch": -20` (Hz), `speed`, `pace`; punctuation sets pauses (`，` short, `……` 0.5 s). `voices` also lists the macOS zh_TW voices installed, including Premium ones.
 - Looks: `paper`, `clean`, `chalk`, `blueprint`, `midnight`. Sizes: `youtube`, `shorts`,
   `tiktok`, `reels`, `instagram`, `square`. Speed: `"pace": 1.2` in `video.json`.
 - The watermark is on by default for English projects; `"watermark": false` turns it off.

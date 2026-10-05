@@ -388,6 +388,72 @@ gain: 0.25 })`) and give each moment one sound, not three.
 A blur filter on every frame makes rendering slow. The kit blurs things once
 and reuses them. Do the same if you add your own blur.
 
+## Traditional Chinese (Taiwan) videos
+
+When the user wants a Chinese video (繁體中文、台灣口音), start the project
+with `--lang zh-TW`:
+
+```bash
+node bin/explainroo.js init videos/<name> --lang zh-TW --theme paper --title "..."
+```
+
+This sets a Taiwan Mandarin voice, turns captions on and the watermark off.
+The rest of the steps are the same.
+
+**Voices.** Kokoro has no Taiwan voice, so Chinese projects use other ones:
+
+| Voice | What it is |
+|---|---|
+| `zh-TW-HsiaoChenNeural` (default) | female, Microsoft Edge neural voice, online, exact word timing |
+| `zh-TW-HsiaoYuNeural`, `zh-TW-YunJheNeural` | female, male, same service |
+| `say:Meijia`, `say:Flo`, `say:Eddy`, ... | macOS built-in zh_TW voices, offline, word timing estimated |
+
+The Edge voices need internet and the `edge-tts` Python package. explainroo
+runs it through `uv` with a pinned version when `uv` is installed, or through
+a `python3` that has `edge-tts` (`EXPLAINROO_PYTHON` picks another Python).
+The narration text is sent to Microsoft's speech service. Tell the user this
+the first time, and use a `say:` voice if they want everything offline.
+`doctor` shows which one works. `speed` defaults to 1 for these voices.
+
+**Writing the narration.** Write the way a Taiwanese person explains
+something to a friend: 口語、短句、一句一個重點.
+
+- Use Taiwan words: 影片 (not 視頻), 軟體, 硬體, 網路, 資訊, 品質, 螢幕, 預設,
+  伺服器, 滑鼠, 資料夾, 飛彈, 雷射, 列印. `check` warns about Simplified
+  characters and common mainland words in script.md and scenes.js.
+- Write numbers so they read naturally. A digit run is fine
+  (`1976 年 7 月`); for units, write the spoken form: `七到十九兆赫`,
+  `一百五十公尺`. Use `{shown|spoken}` for Latin names the voice should say
+  in Chinese: `{Duga|杜加}`, and for a 破音字 the voice gets wrong.
+- Spaces between Chinese characters (for example around a `[#marker]`) are
+  ignored. Keep a space between Chinese and Latin words.
+- About 4 to 5 characters per second at pace 1. A three minute video is
+  roughly 750 characters.
+
+**English subtitles.** Put `[en: ...]` after a sentence to show its English
+line under the Chinese caption:
+
+```markdown
+## hook
+1976 年 7 月，收音機突然傳出奇怪的聲音。[en: In July 1976, radios picked up a strange sound.]
+```
+
+Leave them out for Chinese-only captions. The captions drop ，and 。 the way
+Taiwanese subtitles do, and keep each Chinese line short enough for one
+line with the English under it.
+
+**Cues and text.** `s.cue('雷達')` finds a Chinese word or phrase.
+Chinese screen text wraps between characters, and `*stars*` work inside
+Chinese (`'超視距*雷達*'`). Chinese text uses the system's Traditional
+Chinese font (PingFang TC on macOS; install Noto Sans TC elsewhere).
+Captions take two lines at the bottom, so keep content above `s.safe.bottom`.
+
+**What does not work for Chinese yet.** The speech check (Whisper base.en)
+only understands English. `voice` reports word coverage from the voice's own
+word timing instead, and `verify` skips the narration check. Listen to
+`explainroo say "句子" --voice zh-TW-HsiaoChenNeural` when a word might be
+read wrong.
+
 ## Sizes for each platform
 
 Set `size` to the place the video goes. `explainroo formats` lists the sizes.

@@ -2,7 +2,7 @@
 // draws the whole frame from scratch as a function of the scene time `s.t`.
 // Elements take `at` (when they appear) and optional `out` (when they leave);
 // the theme decides how they enter, and entering elements add sound effects.
-import { clamp, lerp, ease, easeFn, rand01, noise1, hashStr, mulberry32, suggest, normWord, withAlpha, contrast, mixColor, opaque } from './util.js';
+import { clamp, lerp, ease, easeFn, rand01, noise1, hashStr, mulberry32, suggest, normWord, cueTokens, withAlpha, contrast, mixColor, opaque } from './util.js';
 import { colorOf, tintOf, fontString } from './themes.js';
 import { scalePath, quadD, polyD, pathLength, pointAt } from './pathdata.js';
 import { layoutText, lineStartX } from './text.js';
@@ -79,7 +79,7 @@ export class Stage {
   }
 
   _cue(word, n) {
-    const want = String(word).split(/\s+/).map(normWord).filter(Boolean);
+    const want = cueTokens(word).map(normWord).filter(Boolean);
     if (!want.length) throw new SceneError(`cue("${word}") is empty`);
     const ws = this.words;
     if (!ws.length) throw new SceneError(`cue("${word}"): scene "${this.id}" has no narration`);

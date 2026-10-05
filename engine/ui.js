@@ -121,7 +121,7 @@ export class UI {
   }
 
   fontString(size, weight = 400, family = this.font, italic = false) {
-    return `${italic ? 'italic ' : ''}${weight} ${size}px "${family}", Inter, sans-serif`;
+    return `${italic ? 'italic ' : ''}${weight} ${size}px "${family}", Inter, "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", sans-serif`;
   }
 
   _family(f) {

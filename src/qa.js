@@ -7,6 +7,8 @@ import { probe, loudness, ffmpeg } from './ffmpeg.js';
 import { transcribeWords } from './models.js';
 import { readWav } from './wav.js';
 import { alignWords } from './align.js';
+import { isZhVoice } from './zhvoice.js';
+import { zhIssues } from './zhlint.js';
 
 export async function check(project, { log = () => {}, step = 0.25, viewWidth = null } = {}) {
   if (viewWidth !== null && (!Number.isFinite(viewWidth) || viewWidth <= 0)) throw new Error("--view-width must be a positive number");
@@ -19,6 +21,10 @@ export async function check(project, { log = () => {}, step = 0.25, viewWidth = 
       issues.push({ level: 'warn', scene: sc.id, t: null, message: `the voice check could not confirm ${suspicious.length ? suspicious.slice(0, 8).map((w) => `"${w}"`).join(', ') : `${Math.round((1 - v.matchRate) * 100)}% of the words`}. It heard: "${v.transcript.slice(0, 200)}". If a word is mispronounced, write it as {shown|spoken} in script.md.` });
     }
     if (v && v.duration > 40) issues.push({ level: 'hint', scene: sc.id, t: null, message: `the narration runs ${v.duration.toFixed(0)}s; long scenes are easier to follow when split` });
+  }
+  if (isZhVoice(project.config.voice)) {
+    issues.push(...zhIssues(project, fs.readFileSync(project.paths.scenes, 'utf8')));
+    if (project.config.voice.startsWith('say:')) issues.push({ level: 'hint', scene: null, t: null, message: `macOS voices give no word times, so word cues are estimated from character counts; prefer [#markers], or use zh-TW-HsiaoChenNeural for exact timing` });
   }
   const pageIssues = await withEngine(project, timeline, { scale: 0.5, log }, (page) => page.evaluate(([s, w]) => window.explainroo.check(s, w), [step, viewWidth]));
   issues.push(...pageIssues);
@@ -121,7 +127,9 @@ export async function verify(project, { file = null, log = () => {} } = {}) {
   // chunk of a long file ("(bell dings)"), and per scene the report can say
   // where the voice is hard to follow.
   let speech = null;
-  if (a) {
+  // The speech check model (Whisper base.en) only understands English.
+  if (a && isZhVoice(project.config.voice)) issues.push({ level: 'hint', message: 'the narration check is English only and was skipped for this Chinese voice; listen to the video once' });
+  if (a && !isZhVoice(project.config.voice)) {
     const wav = path.join(project.paths.build, 'verify-16k.wav');
     await ffmpeg(['-loglevel', 'error', '-i', video, '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', wav]);
     const { samples } = readWav(wav);

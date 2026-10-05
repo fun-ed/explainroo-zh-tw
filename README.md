@@ -1,3 +1,9 @@
+> **Taiwan fork / 台灣版 fork**
+> This is [fun-ed/explainroo-zh-tw](https://github.com/fun-ed/explainroo-zh-tw), a fork of
+> [vincentsch/explainroo](https://github.com/vincentsch/explainroo) that adds Traditional Chinese
+> (Taiwan) narration, bilingual captions and Taiwan wording checks. See **[README.zh-TW.md](README.zh-TW.md)**.
+> 這是 explainroo 的台灣版 fork，加上台灣口音繁體中文旁白、中英雙語字幕與台灣用語檢查。說明請看 **[README.zh-TW.md](README.zh-TW.md)**。
+
 <p align="center">
   <a href="https://www.explainroo.com">
     <picture>

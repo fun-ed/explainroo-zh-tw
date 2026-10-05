@@ -10,6 +10,7 @@ import { check, stills, sheet, verify } from './qa.js';
 import { startServer, ROOT } from './server.js';
 import { VOICES, loadTTS, loadASR, cacheRoot, ttsDtype, TTS_SAMPLE_RATE } from './models.js';
 import { writeWav } from './wav.js';
+import { isZhVoice, zhSpeak, edgeTTSCommand, ZH_DEFAULT_VOICE } from './zhvoice.js';
 import { ffmpegVersion } from './ffmpeg.js';
 import { findChrome } from './browser.js';
 import { generateImage, imageLog, imageSpend, IMAGE_MODELS } from './images.js';
@@ -21,7 +22,7 @@ const HELP = `explainroo ${VERSION}: narrated explainer videos from code
 Usage: explainroo <command> [project] [options]
 
 Make a video
-  init <dir>            create a project (--theme, --size, --pace, --voice, --title)
+  init <dir>            create a project (--theme, --size, --pace, --voice, --title, --lang zh-TW)
   voice [project]       generate narration and word timings (cached)
   preview [project]     live preview in your browser, reloads on save (--port)
   still [project] [t…]  PNG stills: "12.5", "scene", "scene@2.4" (default: end of every scene)
@@ -166,7 +167,7 @@ export async function main(argv) {
         return 0;
       }
       case 'voices': {
-        print(Object.entries(VOICES).map(([k, v]) => `${k.padEnd(12)} ${v}`).join('\n'), { voices: VOICES });
+        print(Object.entries(VOICES).map(([k, v]) => `${k.padEnd(22)} ${v}`).join('\n'), { voices: VOICES });
         return 0;
       }
       case 'say': return say(pos.join(' '), flags, log, print);
@@ -218,14 +219,18 @@ function init(dir, flags, print) {
   if (fs.existsSync(path.join(target, 'video.json'))) throw new ProjectError(`${target} already has a video.json`);
   const theme = flags.theme || 'paper';
   if (!THEMES.includes(theme)) throw new ProjectError(`theme must be one of ${THEMES.join(', ')}`);
-  const voice = flags.voice || 'af_heart';
+  const lang = flags.lang || 'en';
+  if (!['en', 'zh-TW'].includes(lang)) throw new ProjectError('lang must be "en" or "zh-TW"');
+  const zh = lang === 'zh-TW';
+  const voice = flags.voice || (zh ? ZH_DEFAULT_VOICE : 'af_heart');
   if (!VOICES[voice]) throw new ProjectError(`voice "${voice}" does not exist. Run "explainroo voices".`);
   const title = flags.title || path.basename(target).replace(/[-_]+/g, ' ').replace(/^\w/, (c) => c.toUpperCase());
   fs.mkdirSync(path.join(target, 'assets'), { recursive: true });
-  const tpl = path.join(ROOT, 'templates', 'starter');
+  const tpl = path.join(ROOT, 'templates', zh ? 'starter-zh' : 'starter');
   const size = flags.size || '16:9';
   resolveSize(size);
-  const config = { title, theme, size, voice, music: true, captions: 'auto' };
+  // Chinese videos: Traditional Chinese captions on, no watermark.
+  const config = zh ? { title, theme, size, voice, music: true, captions: true, watermark: false } : { title, theme, size, voice, music: true, captions: 'auto' };
   if (flags.pace !== undefined) config.pace = num(flags.pace, 'pace');
   normalizeConfig(config);
   fs.writeFileSync(path.join(target, 'video.json'), JSON.stringify(config, null, 2) + '\n');
@@ -281,10 +286,15 @@ async function say(text, flags, log, print) {
   if (!text) throw new ProjectError('usage: explainroo say "text to speak" [--voice af_heart] [--speed 1] [--out sample.wav]');
   const voice = flags.voice || 'af_heart';
   if (!VOICES[voice]) throw new ProjectError(`voice "${voice}" does not exist. Run "explainroo voices".`);
-  const tts = await loadTTS({ log });
-  const audio = await tts.generate(text, { voice, speed: num(flags.speed, 'speed') ?? 1 });
-  const out = path.resolve(flags.out || `${voice}.wav`);
-  writeWav(out, audio.audio, audio.sampling_rate || TTS_SAMPLE_RATE);
+  const speed = num(flags.speed, 'speed') ?? 1;
+  const out = path.resolve(flags.out || `${voice.replace(/[^\w-]/g, '_')}.wav`);
+  if (isZhVoice(voice)) {
+    writeWav(out, (await zhSpeak(text, voice, speed)).audio, TTS_SAMPLE_RATE);
+  } else {
+    const tts = await loadTTS({ log });
+    const audio = await tts.generate(text, { voice, speed });
+    writeWav(out, audio.audio, audio.sampling_rate || TTS_SAMPLE_RATE);
+  }
   print(out, { file: out, voice });
   return 0;
 }
@@ -340,7 +350,12 @@ async function doctor(flags, log, print) {
   }
   add('voice model', has('Kokoro-82M-v1.0-ONNX'), has('Kokoro-82M-v1.0-ONNX') ? `Kokoro 82M (${ttsDtype()}) in ${models}` : 'not downloaded yet; "explainroo doctor --fetch" or the first voice run fetches it');
   add('speech check model', has('whisper-base.en_timestamped'), has('whisper-base.en_timestamped') ? 'Whisper base.en' : 'not downloaded yet; fetched on first use');
-  const ok = rows.every((r) => r.ok || r.name.includes('model'));
+  try {
+    add('zh-TW voices', true, `edge-tts through: ${edgeTTSCommand().slice(0, 6).join(' ')}`);
+  } catch (e) {
+    add('zh-TW voices', false, `${e.message} (optional, only for Chinese videos)`);
+  }
+  const ok = rows.every((r) => r.ok || r.name.includes('model') || r.name.startsWith('zh-TW'));
   print(rows.map((r) => `${r.ok ? 'ok  ' : 'FAIL'} ${r.name.padEnd(20)} ${r.detail}`).join('\n'), { ok, checks: rows });
   return ok ? 0 : 1;
 }

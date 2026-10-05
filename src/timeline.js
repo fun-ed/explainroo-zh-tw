@@ -33,7 +33,8 @@ export function buildTimeline(project, voices) {
       text: scene.text,
       transition,
       voice: v.duration ? { url: `build/voice/${scene.id}.wav`, start: start + lead, dur: v.duration } : null,
-      words: v.words.map((w) => ({ text: w.text, start: lead + w.start, end: lead + w.end })),
+      words: v.words.map((w) => ({ text: w.text, start: lead + w.start, end: lead + w.end, space: w.space !== false, sent: w.sent ?? 0 })),
+      subs: scene.subs || {},
       marks: Object.fromEntries(Object.entries(v.marks || {}).map(([k, m]) => [k, lead + m])),
       attrs: a,
     });

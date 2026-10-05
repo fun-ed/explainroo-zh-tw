@@ -145,6 +145,11 @@ export function normWord(w) {
     .normalize('NFKD')
     .replace(/[̀-ͯ]/g, '')
     .replace(/['’]/g, '')
-    .replace(/[^a-z0-9%$€£+#@.]/g, '')
+    .replace(/[^a-z0-9%$€£+#@.\p{Script=Han}]/gu, '')
     .replace(/^\.+|\.+$/g, '');
+}
+
+// "雷達 radar" -> ["雷", "達", "radar"]: Chinese narration is timed per character.
+export function cueTokens(str) {
+  return String(str).split(/\s+/).flatMap((w) => w.match(/\p{Script=Han}|[^\p{Script=Han}]+/gu) || []);
 }

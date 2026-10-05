@@ -3,6 +3,7 @@
 // on first use into ~/.cache/explainroo/models (or $EXPLAINROO_CACHE/models).
 import os from 'node:os';
 import path from 'node:path';
+import { ZH_VOICES } from './zhvoice.js';
 
 export const TTS_MODEL = 'onnx-community/Kokoro-82M-v1.0-ONNX';
 export const ASR_MODEL = 'onnx-community/whisper-base.en_timestamped';
@@ -86,7 +87,7 @@ export async function transcribeWords(samples, { log } = {}) {
   };
 }
 
-// Kokoro v1.0 English voices.
+// Kokoro v1.0 English voices, then the Taiwan Mandarin ones.
 export const VOICES = {
   af_heart: 'American English, female (default)',
   af_bella: 'American English, female',
@@ -116,4 +117,6 @@ export const VOICES = {
   bm_fable: 'British English, male',
   bm_lewis: 'British English, male',
   bm_daniel: 'British English, male',
+  // Taiwan Mandarin voices (src/zhvoice.js).
+  ...ZH_VOICES,
 };

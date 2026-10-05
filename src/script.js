@@ -7,6 +7,10 @@
 //   > director notes and <!-- comments --> are ignored.
 
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+const HAN = /\p{Script=Han}/u;
+// A Han character (with the punctuation around it) is one word; other runs stay whole.
+const ZH_PIECE = /[「『（《〈“‘]*\p{Script=Han}|[^\p{Script=Han}「『（《〈“‘]+|[「『（《〈“‘]+$/gu;
+const SENTENCE_END = /[.!?…。！？]["'’)\]」』）”]*$/;
 const ATTR_NUMBERS = new Set(['hold', 'min', 'lead', 'gap', 'max']);
 
 export class ScriptError extends Error {
@@ -22,7 +26,7 @@ export function normWord(w) {
     .normalize('NFKD')
     .replace(/[̀-ͯ]/g, '')
     .replace(/['’]/g, '')
-    .replace(/[^a-z0-9%$€£+#@.]/g, '')
+    .replace(/[^a-z0-9%$€£+#@.\p{Script=Han}]/gu, '')
     .replace(/^\.+|\.+$/g, '');
 }
 
@@ -54,12 +58,15 @@ export function tokenizeNarration(text, line = 0) {
   const n = text.length;
   const pushWord = (display, spoken) => {
     const prev = units[units.length - 1];
-    if (!pendingSpace && prev && prev.type === 'word' && /^[.,;:!?)\]"'’…]+$/.test(display)) {
+    if (!pendingSpace && prev && prev.type === 'word' && /^[.,;:!?)\]"'’…，。！？、；：」』）》〉”]+$/.test(display)) {
       prev.display += display;
       prev.spoken += spoken;
       return;
     }
-    units.push({ type: 'word', display, spoken, space: pendingSpace || !units.some((u) => u.type === 'word') });
+    // Spaces between Chinese characters (around a [#mark], say) are not real gaps.
+    const lastWord = units.findLast((u) => u.type === 'word');
+    const cjkJoin = lastWord && HAN.test(display[0]) && /[\p{Script=Han}，。！？、；：」』）》]$/u.test(lastWord.display);
+    units.push({ type: 'word', display, spoken, space: cjkJoin ? false : pendingSpace || !lastWord });
     pendingSpace = false;
   };
   while (i < n) {
@@ -70,6 +77,16 @@ export function tokenizeNarration(text, line = 0) {
       const name = end === -1 ? '' : text.slice(i + 2, end);
       if (!/^[A-Za-z0-9_-]+$/.test(name)) throw new ScriptError(`marker "${text.slice(i, end + 1 || i + 12)}" should look like [#name]`, line);
       units.push({ type: 'mark', name });
+      i = end + 1;
+      continue;
+    }
+    if (text.startsWith('[en:', i)) {
+      // [en: English line] is the English subtitle of the sentence it follows.
+      const end = text.indexOf(']', i);
+      const sub = end === -1 ? '' : text.slice(i + 4, end).trim();
+      if (!sub) throw new ScriptError('English subtitles look like [en: The English sentence.]', line);
+      units.push({ type: 'sub', text: sub });
+      pendingSpace = true;
       i = end + 1;
       continue;
     }
@@ -91,16 +108,17 @@ export function tokenizeNarration(text, line = 0) {
         throw new ScriptError('pronunciation overrides look like {shown|spoken}, for example {SQL|sequel}', line);
       }
       let j = end + 1;
-      while (j < n && !/\s/.test(text[j]) && text[j] !== '[' && text[j] !== '{') j++;
+      while (j < n && !/\s/.test(text[j]) && text[j] !== '[' && text[j] !== '{' && !HAN.test(text[j])) j++;
       const trail = text.slice(end + 1, j);
       pushWord(inner.slice(0, bar).trim() + trail, inner.slice(bar + 1).trim() + trail);
       i = j;
       continue;
     }
     let j = i;
-    while (j < n && !/\s/.test(text[j]) && !text.startsWith('[#', j) && !text.startsWith('[pause', j) && text[j] !== '{') j++;
+    while (j < n && !/\s/.test(text[j]) && !text.startsWith('[#', j) && !text.startsWith('[pause', j) && !text.startsWith('[en:', j) && text[j] !== '{') j++;
     const word = text.slice(i, j);
-    pushWord(word, word);
+    if (HAN.test(word)) for (const piece of word.match(ZH_PIECE)) pushWord(piece, piece);
+    else pushWord(word, word);
     i = j;
   }
   return units;
@@ -179,11 +197,23 @@ export function parseScript(source) {
         units.push(...tokenizeNarration(p.text, p.line));
       });
       const words = units.filter((u) => u.type === 'word');
+      // Number the sentences; an [en: ...] belongs to the sentence before it.
+      const subs = {};
+      let sent = 0;
+      let ended = false;
+      for (const u of units) {
+        if (u.type === 'word') {
+          if (ended) sent++;
+          u.sent = sent;
+          ended = SENTENCE_END.test(u.display);
+        } else if (u.type === 'sub') subs[sent] = u.text;
+      }
       return {
         id: s.id,
         attrs: s.attrs,
         line: s.line,
         units,
+        subs,
         text: words.map((w, i) => (i && w.space ? ' ' : '') + w.display).join(''),
         spoken: words.map((w, i) => (i && w.space ? ' ' : '') + w.spoken).join(''),
       };
@@ -214,9 +244,12 @@ export function speechChunks(units, { sentenceGap = 0.3, paragraphGap = 0.55, pa
       cur = { gapBefore, words: [], text: '' };
       gapBefore = 0;
     }
-    cur.text += (cur.words.length ? ' ' : '') + u.spoken;
+    // Chinese characters are joined without spaces.
+    const prev = cur.words[cur.words.length - 1];
+    const tight = prev && !u.space && (HAN.test(u.spoken[0]) || HAN.test(prev.spoken.slice(-1)) || /^[，。！？、；：」』）》]/.test(u.spoken));
+    cur.text += (cur.words.length && !tight ? ' ' : '') + u.spoken;
     cur.words.push({ unitIndex: index, display: u.display, spoken: u.spoken });
-    if (/[.!?…]["'’)\]]*$/.test(u.spoken)) {
+    if (SENTENCE_END.test(u.spoken)) {
       close();
       gapBefore = sentenceGap / pace;
     }

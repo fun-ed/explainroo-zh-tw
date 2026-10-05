@@ -181,10 +181,13 @@ export function tintOf(theme, c) {
   return mixColor(theme.surface, base, theme.tintStrength);
 }
 
+export const CJK_FONTS = '"PingFang TC", "Noto Sans TC", "Noto Sans CJK TC", "Microsoft JhengHei"';
+
 export function fontString(theme, role = 'body', size = 48, weight) {
   const f = theme.fonts[role] || theme.fonts.body;
   const w = weight ?? f.weight;
-  const fallback = role === 'mono' ? 'monospace' : 'sans-serif';
+  // Chinese text falls back to a Traditional Chinese system font.
+  const fallback = `${CJK_FONTS}, ${role === 'mono' ? 'monospace' : 'sans-serif'}`;
   return `${w} ${Math.round(size * 100) / 100}px "${f.family}", ${fallback}`;
 }
 

@@ -6,10 +6,11 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { speechChunks, resolveMarks } from './script.js';
 import { alignWords } from './align.js';
+import { isZhVoice, zhSpeak, alignChars } from './zhvoice.js';
 import { loadTTS, transcribeWords, TTS_MODEL, ASR_MODEL, TTS_SAMPLE_RATE, ttsDtype } from './models.js';
 import { writeWav, readWav, resample, trimSilence } from './wav.js';
 
-const PIPELINE = 7;
+const PIPELINE = 8;
 
 function sceneHash(scene, chunks, config) {
   return crypto
@@ -66,7 +67,7 @@ export async function synthesize(project, { force = false, log = () => {}, only 
   if (!todo.length) return result;
 
   const needsSpeech = todo.some((t) => t.chunks.length);
-  const tts = needsSpeech ? await loadTTS({ log }) : null;
+  const tts = needsSpeech && !isZhVoice(config.voice) ? await loadTTS({ log }) : null;
   for (const { scene, chunks, hash } of todo) {
     const t0 = Date.now();
     const info = await synthesizeScene(project, scene, chunks, hash, tts, log);
@@ -105,16 +106,26 @@ async function synthesizeScene(project, scene, chunks, hash, tts, log) {
       pieces.push(new Float32Array(Math.round(gap * sr)));
       cursor += Math.round(gap * sr);
     }
-    const audio = await tts.generate(chunk.text, { voice: config.voice, speed: config.speed * config.pace });
-    const samples = trimSilence(audio.audio, audio.sampling_rate || sr);
+    const zh = isZhVoice(config.voice);
+    // Chinese voices report when each word is spoken, so no Whisper pass.
+    const spoken = zh ? await zhSpeak(chunk.text, config.voice, config.speed * config.pace) : null;
+    const audio = zh ? spoken.audio : (await tts.generate(chunk.text, { voice: config.voice, speed: config.speed * config.pace })).audio;
+    const samples = trimSilence(audio, sr);
+    const trimmed = (samples.byteOffset - audio.byteOffset) / 4 / sr;
     const start = cursor / sr;
     const dur = samples.length / sr;
     pieces.push(samples);
     cursor += samples.length;
 
-    const heard = await transcribeWords(resample(samples, sr, 16000), { log });
-    transcripts.push(heard.text);
-    const aligned = alignWords(chunk.words, heard.words, dur);
+    let aligned;
+    if (zh) {
+      transcripts.push(spoken.boundaries.map((b) => b.text).join(''));
+      aligned = alignChars(chunk.words, spoken.boundaries.map((b) => ({ ...b, start: b.start - trimmed, end: b.end - trimmed })), dur, spoken.approximate);
+    } else {
+      const heard = await transcribeWords(resample(samples, sr, 16000), { log });
+      transcripts.push(heard.text);
+      aligned = alignWords(chunk.words, heard.words, dur);
+    }
     chunk.words.forEach((w, k) => {
       const a = aligned.words[k];
       wordTimes[w.unitIndex] = { start: start + a.start, end: start + a.end, matched: a.matched };
@@ -137,7 +148,7 @@ async function synthesizeScene(project, scene, chunks, hash, tts, log) {
   const words = [];
   scene.units.forEach((u, i) => {
     if (u.type !== 'word' || !wordTimes[i]) return;
-    words.push({ text: u.display, spoken: u.spoken, start: round(wordTimes[i].start), end: round(wordTimes[i].end), matched: wordTimes[i].matched });
+    words.push({ text: u.display, spoken: u.spoken, space: u.space, sent: u.sent, start: round(wordTimes[i].start), end: round(wordTimes[i].end), matched: wordTimes[i].matched });
   });
   const info = {
     hash,

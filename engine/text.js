@@ -1,6 +1,9 @@
 // Text layout: *accent* runs, word wrapping, and per-word positions so text
 // can be revealed by line, by character or word by word.
 
+const HAN = /\p{Script=Han}/u;
+const CJK_PIECE = /\*|[「『（《〈“‘]*\p{Script=Han}[，。！？、；：」』）》〉”’…]*|[^\s*\p{Script=Han}]+/gu;
+
 // "Every site has an *address*" -> words with an accent flag.
 export function parseRich(str) {
   const words = [];
@@ -9,6 +12,18 @@ export function parseRich(str) {
   paragraphs.forEach((para, pi) => {
     const tokens = para.split(/(\s+)/).filter((t) => t.length && !/^\s+$/.test(t));
     for (let tok of tokens) {
+      // Chinese has no spaces: every Han character is its own word, so lines
+      // can wrap between characters and reveals go character by character.
+      // Punctuation stays with its character, so no line starts with "，".
+      if (HAN.test(tok)) {
+        (tok.match(CJK_PIECE) || []).forEach((piece, k) => {
+          const prev = words[words.length - 1];
+          if (piece === '*') accent = !accent;
+          else if (k > 0 && prev && !prev.br && /^[，。！？、；：」』）》〉”’…]+$/.test(piece)) prev.text += piece;
+          else words.push({ text: piece, accent, tight: k > 0 });
+        });
+        continue;
+      }
       let startAccent = accent;
       let endToggle = false;
       if (tok.startsWith('*') && tok.length > 1) {
@@ -51,12 +66,13 @@ export function layoutText(ctx, { str, font, size, maxWidth = Infinity, lineHeig
       continue;
     }
     const ww = ctx.measureText(w.text).width;
-    const next = cur.words.length ? cur.width + space + ww : ww;
+    const gap = w.tight ? 0 : space;
+    const next = cur.words.length ? cur.width + gap + ww : ww;
     if (cur.words.length && next > maxWidth) {
       lines.push(cur);
       cur = { words: [], width: 0 };
     }
-    const x = cur.words.length ? cur.width + space : 0;
+    const x = cur.words.length ? cur.width + gap : 0;
     cur.words.push({ text: w.text, accent: w.accent, x, w: ww, index: index++ });
     cur.width = x + ww;
   }

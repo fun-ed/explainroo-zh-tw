@@ -28,7 +28,7 @@
 - [ ] T1 在 src/zhxxx.js 加上 ……（驗證：test/zh.test.js 新增的測試會通過）
 - [ ] T2 在 src/qa.js 呼叫 ……（驗證：check 對範例專案輸出 ……）
 - [ ] T3 更新 AGENTS.md 繁中那一節
-- [ ] T4 更新 README.zh-TW.md、CHANGELOG.md
+- [ ] T4 更新 README.md、CHANGELOG.md
 - [ ] T5 跑完 sync-operation.md 的驗證清單
 ```
 
@@ -37,7 +37,7 @@
 - `npm test` 全部通過，包含新加的測試。
 - 英文 starter 專案的 `render --draft` 跟改動前一樣。
 - 中文 starter 專案的 `check` 沒有錯誤，截圖要看過。
-- 文件已更新：AGENTS.md（給 agent 看）、README.zh-TW.md（給使用者看）、CHANGELOG.md。
+- 文件已更新：AGENTS.md（給 agent 看）、README.md（給使用者看）、CHANGELOG.md。
 - 如果動到上游檔案，sync-operation.md 的衝突熱點表格也要更新。
 
 ## 範本

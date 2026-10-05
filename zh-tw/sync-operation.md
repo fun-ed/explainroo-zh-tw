@@ -94,7 +94,7 @@ node bin/explainroo.js still videos/sync-zh steps@5
 | `scripts/edge_speak.py` | 呼叫 edge-tts 並輸出斷詞時間。檔名不能叫 `edge_tts.py`，否則會蓋掉套件名稱 |
 | `templates/starter-zh/` | 繁中範本 |
 | `test/zh.test.js` | 中文相關測試 |
-| `README.zh-TW.md`、`zh-tw/` | fork 的文件 |
+| `zh-tw/` | fork 的維護文件 |
 
 ### 有掛勾的上游檔案
 
@@ -112,7 +112,7 @@ node bin/explainroo.js still videos/sync-zh steps@5
 | `engine/util.js`、`engine/stage.js` | `normWord` 保留漢字；新增 `cueTokens`；`_cue` 改用它 | |
 | `engine/themes.js`、`engine/ui.js` | 字型 fallback 加上 `CJK_FONTS` | |
 | `AGENTS.md` | 「Traditional Chinese (Taiwan) videos」一整節，放在「Sizes for each platform」前面 | 保留上游內容，把整節貼回去 |
-| `README.md` | 最上面的雙語 fork 說明 | 保留上游內容，把說明貼回最上面 |
+| `README.md` | 整份改寫成 fork 的雙語 README | 一律保留我們的版本：`git checkout --ours README.md`。再看一下上游 README 的 diff，有新的安裝需求或指令就補進來 |
 
 ### 找出所有掛勾
 

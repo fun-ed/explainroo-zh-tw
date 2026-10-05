@@ -1,175 +1,181 @@
-> **Taiwan fork / 台灣版 fork**
-> This is [fun-ed/explainroo-zh-tw](https://github.com/fun-ed/explainroo-zh-tw), a fork of
-> [vincentsch/explainroo](https://github.com/vincentsch/explainroo) that adds Traditional Chinese
-> (Taiwan) narration, bilingual captions and Taiwan wording checks. See **[README.zh-TW.md](README.zh-TW.md)**.
-> 這是 explainroo 的台灣版 fork，加上台灣口音繁體中文旁白、中英雙語字幕與台灣用語檢查。說明請看 **[README.zh-TW.md](README.zh-TW.md)**。
-
-<p align="center">
-  <a href="https://www.explainroo.com">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="docs/media/logo-dark.png">
-      <img src="docs/media/logo-light.png" alt="explainroo" width="340">
-    </picture>
-  </a>
-</p>
-
-<p align="center">
-  <b>Explainer videos made by your AI agent.</b><br>
-  Free and open source. The voice, the timing and the rendering run on your computer.
-</p>
-
-<p align="center">
-  <a href="https://www.explainroo.com">Website</a> &nbsp;·&nbsp;
-  <a href="https://www.explainroo.com/videos/">Example videos</a> &nbsp;·&nbsp;
-  <a href="https://www.explainroo.com/docs/">Docs</a> &nbsp;·&nbsp;
-  <a href="AGENTS.md">AGENTS.md</a>
-</p>
-
-https://github.com/user-attachments/assets/6dd5dc32-c975-4e0e-8cd4-2ef3ccc11e61
-
-<p align="center">
-  <sub>A coding agent made this video with explainroo. You can also watch it on <a href="https://www.explainroo.com/videos/how-explainroo-makes-a-video/">explainroo.com</a>.</sub>
-</p>
-
-## Make a video
-
-> [!TIP]
-> **Give your coding agent this repo and tell it what the video should explain.**
-> It works with Claude Code, Codex, Pi and other coding agents. Right now it
-> works best with Claude Code and Opus 5.5.
-
-Copy this into your agent and put your topic in place of the brackets:
-
-```text
-Make me a short explainer video about [your topic].
-Use explainroo for it: clone https://github.com/vincentsch/explainroo,
-read its AGENTS.md and follow the steps.
-```
-
-The agent sets up explainroo, makes the video and checks it. You get an MP4
-file.
-
-## How does it work?
-
-An explainer video is a short video where a voice explains a topic and
-drawings appear while it speaks. For explainroo, the agent writes two files.
-`script.md` has the words the voice says. `scenes.js` draws the pictures with
-a bit of JavaScript, and each drawing can appear on a word from the script.
-explainroo does the rest:
-
-- **Voice.** [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M), an open
-  voice model, reads the script aloud. It has 28 voices and needs no account
-  or API key.
-- **Timing.** [Whisper](https://github.com/openai/whisper) listens to the
-  recording and notes when each word is spoken.
-- **Pictures.** Chrome runs in the background and draws the frames. The lines
-  can look hand drawn ([Rough.js](https://roughjs.com)), and there are 1,800
-  icons from [Lucide](https://lucide.dev). A scene can also show charts, code
-  or your own screenshots.
-- **Sound.** explainroo makes its own background music for each video and
-  adds small sound effects. The music gets quieter while the voice speaks.
-- **File.** ffmpeg puts it all together into an MP4.
-
-An agent can't watch a video, so explainroo gives it other ways to check its
-work. It saves stills of the scenes and a sheet of small frames for the whole
-video. A layout check finds text that is cut off or overlaps, and a speech
-check finds words the voice got wrong. For a feed-sized player,
-`explainroo check videos/<name> --view-width 854` also flags small text.
-
-None of this leaves your computer, and it costs nothing. Your coding agent is
-a separate service with its own terms and prices. If you want, the agent can
-also make illustrations with an AI image model through OpenRouter, and you pay
-for each image.
-
-## Looks
-
-There are five looks: paper, clean, chalk, blueprint and midnight. You change
-a video's look with one setting in `video.json`. Here is one frame in each
-look, from the example videos.
-
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/media/looks-dark.webp">
-    <img src="docs/media/looks-light.webp" alt="Frames from five example videos, one in each look: paper, clean, chalk, blueprint and midnight" width="820">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/media/logo-dark.png">
+    <img src="docs/media/logo-light.png" alt="explainroo" width="300">
   </picture>
 </p>
 
-## Sizes
-
-You pick the size for the place the video goes. YouTube videos are wide, and
-Shorts, TikTok and Reels are tall. Instagram and LinkedIn posts use 4:5, and
-there is a square size too. Shorts, TikTok and Reels put their own buttons
-over the video, and explainroo keeps your text out of those spots.
-
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/media/sizes-dark.webp">
-    <img src="docs/media/sizes-light.webp" alt="Frames from example videos in four sizes: YouTube 16:9, TikTok 9:16, LinkedIn 4:5 and square" width="820">
-  </picture>
+  <b>讓 AI agent 幫你做解說影片，支援台灣口音繁中旁白和中英雙語字幕。</b><br>
+  Explainer videos made by your AI agent, with Taiwan Mandarin narration and bilingual captions.
 </p>
 
-Tall, 4:5 and square videos get captions that light up word by word.
-
-## Pace
-
-`"pace": 1.2` in a video's `video.json` makes the voice, the pauses and the
-animations 20% quicker. The music gets a little quicker too. Pace goes from
-0.7 to 1.6, and 1 is normal.
-
-## Product demos
-
-explainroo can also make product demos, the videos software companies make to
-show their app. The agent rebuilds the app's screens from its code or its
-website, with the same colors, fonts and button labels. A mouse pointer then
-clicks through the screens and types into the fields. Tell your agent which
-product it is and where to find its code or website.
-
 <p align="center">
-  <a href="https://www.explainroo.com/videos/unspar-product-demo/">
-    <img src="docs/media/product-demo.webp" alt="A frame from the Unspar product demo: a form with a website field and an open dropdown" width="820">
-  </a>
+  <a href="#繁體中文">繁體中文</a> · <a href="#english">English</a> · <a href="AGENTS.md">AGENTS.md</a> ·
+  上游 upstream: <a href="https://github.com/vincentsch/explainroo">vincentsch/explainroo</a>
 </p>
 
-Here are the demos for [Unspar](https://www.explainroo.com/videos/unspar-product-demo/)
-and [Vroni](https://www.explainroo.com/videos/vroni-product-demo/), two of my
-own products. The files for the Unspar demo are in
-[examples/unspar-demo](examples/unspar-demo). explainroo.com also has
-unofficial demos of [Gmail, ChatGPT and Claude](https://www.explainroo.com/videos/#product-demos).
+---
 
-## Install it yourself
+## 繁體中文
 
-You need Node.js 20.11 or newer, ffmpeg, and Chrome or Chromium. The first
-setup downloads the voice and timing models once, about 400 MB together. You
-don't need a graphics card. I develop and test explainroo on Linux. It should
-work on macOS and Windows, but I have tested it less there.
+這是 [explainroo](https://github.com/vincentsch/explainroo) 的台灣版 fork。
+agent 會寫好旁白腳本（`script.md`）和畫面（`scenes.js`），explainroo 負責配音、對時、畫圖、配樂，最後輸出 MP4。
+
+### 1. 安裝
+
+需要先裝好的東西：
+
+| 項目 | 用途 | macOS 安裝方式 |
+|---|---|---|
+| Node.js 20.11 以上 | 執行 explainroo | `brew install node` |
+| ffmpeg | 合成影片 | `brew install ffmpeg` |
+| Chrome 或 Chromium | 在背景畫影格 | 已有 Chrome 就不用裝；沒有的話跑 `npx playwright install chromium-headless-shell` |
+| uv（做中文影片才需要） | 執行 Edge 中文語音 | `brew install uv`；或改用 `pip install edge-tts==7.2.8` |
 
 ```bash
-git clone https://github.com/vincentsch/explainroo.git
-cd explainroo
+git clone https://github.com/fun-ed/explainroo-zh-tw.git
+cd explainroo-zh-tw
 npm install
-node bin/explainroo.js doctor --fetch
+node bin/explainroo.js doctor          # 檢查環境，zh-TW voices 那一行要是 ok
+node bin/explainroo.js doctor --fetch  # 只有做英文影片才需要，會下載英文語音模型
 ```
 
-Then start your agent in the `explainroo` folder and ask for a video, for
-example "Make a 60 second video about how HTTPS keeps a password secret." The
-agent follows [AGENTS.md](AGENTS.md) and saves the video as
-`videos/<name>/out/video.mp4`. The example videos are in
-[examples/](examples/), and the full documentation is on
-[explainroo.com](https://www.explainroo.com/docs/).
+### 2. 會安裝哪些東西
 
-## The watermark
+全部都裝在專案資料夾或使用者的 cache 目錄，不會裝全域套件。
 
-Each video has a small "explainroo.com" in one corner. `"watermark": false` in
-`video.json` turns it off. Please keep it if you can, because that is how
-other people find explainroo.
+| 東西 | 位置 | 大小 | 什麼時候需要 |
+|---|---|---|---|
+| npm 套件（Transformers.js、kokoro-js、playwright-core、Rough.js） | `node_modules/` | 約 490 MB | 一定需要 |
+| Kokoro 英文語音、Whisper 英文辨識模型 | `~/.cache/explainroo/models/` | 約 400 MB | 只有英文影片需要，中文影片完全不會用到 |
+| edge-tts 7.2.8 和它的相依套件（Python） | `~/.cache/uv/`（由 uv 管理） | 很小 | 中文影片第一次產生語音時自動下載 |
+| macOS zh_TW 語音（Meijia 等） | 系統內建 | 不用另外裝 | 選擇離線中文語音時才用 |
 
-## Credits and license
+> [!NOTE]
+> Edge 中文語音會把**旁白文字**送到 Microsoft 的語音服務，所以需要網路。
+> 內容不能外流的話，請在 `video.json` 改用離線語音 `"voice": "say:Meijia"`。這只在 macOS 上可用，字的時間點是估算的。
 
-explainroo is MIT licensed. The voice comes from
-[Kokoro](https://huggingface.co/hexgrad/Kokoro-82M), and the word timing from
-[Whisper](https://github.com/openai/whisper) through
-[Transformers.js](https://github.com/huggingface/transformers.js). The
-drawings use [Rough.js](https://roughjs.com) and [Lucide](https://lucide.dev)
-icons. [Playwright](https://playwright.dev) runs Chrome, and
-[ffmpeg](https://ffmpeg.org) makes the video file. The fonts are under the SIL
-Open Font License.
+### 3. 使用方式
+
+**最簡單的方式：直接跟 coding agent 說。** 在專案資料夾裡啟動 agent（例如 Claude Code），選一種貼上：
+
+```text
+# 純繁中字幕
+用 explainroo 做一支 3 分鐘的繁體中文解說影片，主題是〔主題〕。
+讀 AGENTS.md 的 Traditional Chinese (Taiwan) videos，用 --lang zh-TW，只要繁中字幕。
+
+# 中英雙語字幕
+用 explainroo 做一支 3 分鐘的繁體中文解說影片，主題是〔主題〕。
+讀 AGENTS.md 的 Traditional Chinese (Taiwan) videos，用 --lang zh-TW，每句加 [en: ...] 英文字幕。
+```
+
+**自己下指令：**
+
+```bash
+node bin/explainroo.js init videos/demo --lang zh-TW --theme paper --title "點連結之後"
+node bin/explainroo.js voice  videos/demo   # 產生語音和每個字的時間點
+node bin/explainroo.js check  videos/demo   # 檢查版面、簡體字、中國用語
+node bin/explainroo.js sheet  videos/demo   # 一張圖看整部影片的縮圖
+node bin/explainroo.js render videos/demo   # 輸出 videos/demo/out/video.mp4
+```
+
+`init --lang zh-TW` 會用 HsiaoChen 女聲、開字幕、關 watermark，並建立有中英雙語範例的腳本。
+
+### 4. 腳本寫法：純中文或中英雙語
+
+```markdown
+## hook
+1976 年 7 月，收音機突然傳出奇怪的聲音。[en: In July 1976, radios picked up a strange sound.]
+[#tap] 它叫做 {Duga|杜加}，俄文的意思是「弧」。[en: It was called Duga, which means arc.]
+```
+
+| 想要的效果 | 寫法 |
+|---|---|
+| 純繁中字幕 | 不要寫 `[en: ...]` |
+| 中英雙語字幕 | 每一句後面加 `[en: 英文翻譯]` |
+| 英文名字念成中文 | `{Duga|杜加}` |
+| 修正念錯的破音字 | `{畫面上的字|念法}` |
+| 畫面在某個時間點出現 | 句子裡放 `[#name]`，或在 scenes.js 用 `s.cue('雷達')` |
+
+### 5. 讓中文影片更好的小技巧
+
+- **用台灣用語。** 寫影片、軟體、網路、資訊、伺服器、飛彈。`check` 會抓出簡體字和中國用語。
+- **數字和單位寫成念法。** `一百五十公尺`、`七到十九兆赫` 比 `150 m` 念得自然。年份可以直接寫 `1976 年`。
+- **句子要短。** 一句大約 10 到 20 個字。字幕會在句尾和逗號處換段，雙語時中文保持一行，英文放在下面。
+- **英文字幕也要短。** 太長的英文會被縮小字體塞進一行。
+- **長度怎麼算。** 每秒大約 4 到 5 個字，3 分鐘大約 750 字。太長的話在 `video.json` 加 `"pace": 1.1`。
+- **換聲音。** `node bin/explainroo.js voices` 可以列出所有語音。男聲用 `zh-TW-YunJheNeural`，另一個女聲是 `zh-TW-HsiaoYuNeural`。
+- **試聽一句。** `node bin/explainroo.js say "測試句子" --voice zh-TW-HsiaoChenNeural`。
+- **直式影片。** 加上 `--size shorts`、`tiktok` 或 `reels`。直式的字幕區比較窄，雙語時英文會比較小。
+
+### 6. 已知限制
+
+- 自動發音檢查只懂英文。中文影片 render 完要自己聽一遍。
+- 簡體字和中國用語的檢查只用常見字表，不是完整的轉換器。
+- 中文字型依賴系統：macOS 用 PingFang TC，Linux 請裝 Noto Sans TC（`fonts-noto-cjk`）。
+
+### 7. 維護文件
+
+[同步上游](zh-tw/sync-operation.md) · [新功能流程](zh-tw/feature-workflow.md) · [待辦清單](zh-tw/TASKS.md) · [版本紀錄](zh-tw/CHANGELOG.md)
+
+---
+
+## English
+
+A Taiwan fork of [explainroo](https://github.com/vincentsch/explainroo). Your coding agent writes
+`script.md` (narration) and `scenes.js` (drawings). explainroo adds the voice, timing, drawings and
+music, and renders an MP4. This fork adds Taiwan Mandarin narration, per-character timing,
+Traditional Chinese or bilingual captions, and a Taiwan wording check.
+
+### Install
+
+Needs Node.js 20.11+, ffmpeg, and Chrome or Chromium. Chinese videos also need `uv`, or
+`pip install edge-tts==7.2.8`.
+
+```bash
+git clone https://github.com/fun-ed/explainroo-zh-tw.git
+cd explainroo-zh-tw
+npm install
+node bin/explainroo.js doctor --fetch   # --fetch downloads the English voice models (~400 MB)
+```
+
+What gets installed: npm packages in `node_modules/` (~490 MB), English voice and speech models
+in `~/.cache/explainroo/models/` (English videos only), and edge-tts in uv's cache on the first
+Chinese voice run. Nothing is installed globally.
+
+### Use
+
+Tell your agent, from inside the repo:
+
+```text
+Make a 2 minute explainer video about [topic]. Use explainroo: read AGENTS.md and follow the steps.
+# Chinese: add "Use --lang zh-TW, with [en: ...] English subtitles" for bilingual captions.
+```
+
+Or run it yourself:
+
+```bash
+node bin/explainroo.js init videos/demo --title "How DNS works"        # English
+node bin/explainroo.js init videos/demo-zh --lang zh-TW --title "DNS"  # Traditional Chinese
+node bin/explainroo.js render videos/demo-zh                            # -> out/video.mp4
+```
+
+- English videos: Kokoro voices, fully offline. `voices` lists them.
+- Chinese videos: Edge zh-TW neural voices send the narration text to Microsoft's speech service.
+  `"voice": "say:Meijia"` stays offline on macOS, with estimated word timing.
+- Bilingual captions: write `[en: ...]` after each Chinese sentence.
+- Looks: `paper`, `clean`, `chalk`, `blueprint`, `midnight`. Sizes: `youtube`, `shorts`,
+  `tiktok`, `reels`, `instagram`, `square`. Speed: `"pace": 1.2` in `video.json`.
+- The watermark is on by default for English projects; `"watermark": false` turns it off.
+
+Full reference for agents: [AGENTS.md](AGENTS.md). Upstream docs: [explainroo.com/docs](https://www.explainroo.com/docs/).
+
+### License
+
+MIT, same as upstream (© Vincent Schmalbach); see [LICENSE](LICENSE). Built on
+[Kokoro](https://huggingface.co/hexgrad/Kokoro-82M), [Whisper](https://github.com/openai/whisper)
+via [Transformers.js](https://github.com/huggingface/transformers.js),
+[edge-tts](https://github.com/rany2/edge-tts), [Rough.js](https://roughjs.com),
+[Lucide](https://lucide.dev), [Playwright](https://playwright.dev) and [ffmpeg](https://ffmpeg.org).
+Fonts are under the SIL Open Font License.

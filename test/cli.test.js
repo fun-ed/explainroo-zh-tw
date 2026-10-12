@@ -49,6 +49,13 @@ test('init names a text flag that was given without a value', async () => {
   assert.equal(fs.existsSync(target), false);
 });
 
+test('a numeric flag without a value is an error, not 1', async () => {
+  const base = tempDir();
+  const r = await run(['init', path.join(base, 'video'), '--pace']);
+  assert.equal(r.code, 1);
+  assert.match(r.err, /--pace needs a value/);
+});
+
 test('init with valid settings writes video.json and the starter files', async () => {
   const base = tempDir();
   const target = path.join(base, 'my-first-video');

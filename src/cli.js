@@ -64,6 +64,7 @@ const BOOL = new Set(['json', 'draft', 'force', 'fetch', 'help', 'version', 'qui
 
 function num(v, name) {
   if (v === undefined) return undefined;
+  if (v === true) throw new ProjectError(`--${name} needs a value`);
   const n = Number(v);
   if (!Number.isFinite(n)) throw new ProjectError(`--${name} must be a number`);
   return n;
@@ -288,11 +289,11 @@ async function preview(dir, flags, log) {
 
 async function say(text, flags, log, print) {
   if (!text) throw new ProjectError('usage: explainroo say "text to speak" [--voice af_heart] [--speed 1] [--out sample.wav]');
-  const voice = flags.voice || 'af_heart';
+  const voice = textFlag(flags, 'voice') || 'af_heart';
   if (!VOICES[voice]) throw new ProjectError(`voice "${voice}" does not exist. Run "explainroo voices".`);
   const tts = await loadTTS({ log });
   const audio = await tts.generate(text, { voice, speed: num(flags.speed, 'speed') ?? 1 });
-  const out = path.resolve(flags.out || `${voice}.wav`);
+  const out = path.resolve(textFlag(flags, 'out') || `${voice}.wav`);
   writeWav(out, audio.audio, audio.sampling_rate || TTS_SAMPLE_RATE);
   print(out, { file: out, voice });
   return 0;

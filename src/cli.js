@@ -313,7 +313,7 @@ function icons(words, print) {
     .filter((x) => x.score > 0)
     .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
     .slice(0, 40);
-  print(scored.map((x) => `${x.name.padEnd(28)} ${x.tags.slice(0, 6).join(', ')}`).join('\n') || 'no matches', { icons: scored.map((x) => x.name) });
+  print(scored.map((x) => `${x.name.padEnd(28)} ${x.tags.slice(0, 6).join(', ')}`).join('\n') || `no icons match "${words.join(' ')}"`, { icons: scored.map((x) => x.name) });
   return 0;
 }
 

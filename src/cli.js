@@ -101,7 +101,7 @@ export async function main(argv) {
         print(rows.map((r) => `${r.scene.padEnd(18)} ${r.voice.toFixed(1).padStart(5)}s  ${Math.round(r.confirmed * 100)}% confirmed${r.unconfirmed.length ? '  unconfirmed: ' + r.unconfirmed.slice(0, 6).join(', ') : ''}`).join('\n') + `\ntotal ${timeline.duration.toFixed(1)}s`, { scenes: rows, duration: timeline.duration });
         return 0;
       }
-      case 'preview': return preview(pos[0], flags, log);
+      case 'preview': return await preview(pos[0], flags, log);
       case 'still': {
         const isProject = pos[0] && fs.existsSync(path.join(pos[0], 'video.json'));
         const project = loadProject(isProject ? pos.shift() : undefined);
@@ -169,7 +169,7 @@ export async function main(argv) {
         print(Object.entries(VOICES).map(([k, v]) => `${k.padEnd(12)} ${v}`).join('\n'), { voices: VOICES });
         return 0;
       }
-      case 'say': return say(pos.join(' '), flags, log, print);
+      case 'say': return await say(pos.join(' '), flags, log, print);
       case 'themes': {
         const desc = {
           paper: 'hand-drawn marker on warm paper; brush transitions; warm music',
@@ -194,7 +194,7 @@ export async function main(argv) {
         return 0;
       }
       case 'icons': return icons(pos, print);
-      case 'doctor': return doctor(flags, log, print);
+      case 'doctor': return await doctor(flags, log, print);
       default:
         process.stderr.write(`unknown command "${cmd}"\n\n${HELP}\n`);
         return 2;

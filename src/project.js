@@ -168,7 +168,7 @@ export function findProjectDir(arg) {
   const dir = path.resolve(arg || '.');
   if (fs.existsSync(path.join(dir, 'video.json'))) return dir;
   if (arg) fail(`${dir} is not a video project (no video.json). Create one with "explainroo init ${arg}".`);
-  fail('no video.json here. Pass the project folder, for example "explainroo render videos/my-video".');
+  fail('no video.json here. Run the command in a video folder or pass the project folder, for example "explainroo <command> videos/my-video".');
 }
 
 export function loadProject(arg) {

@@ -212,22 +212,31 @@ export async function main(argv) {
   }
 }
 
+// A text flag given without a value (for example "--title" at the end of the
+// line) parses as true. Name the flag instead of failing deep in string code.
+function textFlag(flags, name) {
+  if (flags[name] === true) throw new ProjectError(`--${name} needs a value`);
+  return flags[name];
+}
+
 function init(dir, flags, print) {
   if (!dir) throw new ProjectError('usage: explainroo init <dir> [--theme paper] [--size youtube|tiktok|linkedin|...] [--pace 1.2] [--voice af_heart] [--title "..."]');
   const target = path.resolve(dir);
   if (fs.existsSync(path.join(target, 'video.json'))) throw new ProjectError(`${target} already has a video.json`);
-  const theme = flags.theme || 'paper';
+  const theme = textFlag(flags, 'theme') || 'paper';
   if (!THEMES.includes(theme)) throw new ProjectError(`theme must be one of ${THEMES.join(', ')}`);
-  const voice = flags.voice || 'af_heart';
+  const voice = textFlag(flags, 'voice') || 'af_heart';
   if (!VOICES[voice]) throw new ProjectError(`voice "${voice}" does not exist. Run "explainroo voices".`);
-  const title = flags.title || path.basename(target).replace(/[-_]+/g, ' ').replace(/^\w/, (c) => c.toUpperCase());
-  fs.mkdirSync(path.join(target, 'assets'), { recursive: true });
+  const title = textFlag(flags, 'title') || path.basename(target).replace(/[-_]+/g, ' ').replace(/^\w/, (c) => c.toUpperCase());
   const tpl = path.join(ROOT, 'templates', 'starter');
-  const size = flags.size || '16:9';
+  const size = textFlag(flags, 'size') || '16:9';
   resolveSize(size);
   const config = { title, theme, size, voice, music: true, captions: 'auto' };
   if (flags.pace !== undefined) config.pace = num(flags.pace, 'pace');
   normalizeConfig(config);
+  // Create the folder only after every setting checks out, so a bad flag
+  // leaves nothing behind.
+  fs.mkdirSync(path.join(target, 'assets'), { recursive: true });
   fs.writeFileSync(path.join(target, 'video.json'), JSON.stringify(config, null, 2) + '\n');
   fs.writeFileSync(path.join(target, 'script.md'), fs.readFileSync(path.join(tpl, 'script.md'), 'utf8').replace('{{title}}', title));
   fs.writeFileSync(path.join(target, 'scenes.js'), fs.readFileSync(path.join(tpl, 'scenes.js'), 'utf8').replace(/\{\{title\}\}/g, title.replace(/'/g, "\\'")));

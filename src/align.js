@@ -1,6 +1,76 @@
 // Aligns the words we asked the voice model to say with the words Whisper
 // heard, so every script word gets a start and end time.
+import { createRequire } from 'node:module';
 import { normWord } from './script.js';
+import { japaneseReadings } from './phonemes.js';
+
+const require = createRequire(import.meta.url);
+
+// Whisper often writes Mandarin in Traditional characters, even when the
+// script is Simplified. Both sides are compared in Simplified.
+let toSimplified;
+function simplified(text) {
+  toSimplified ??= require('opencc-js/t2cn').Converter({ from: 'tw', to: 'cn' });
+  return toSimplified(text);
+}
+
+// Whisper also often writes another character with the same sound, like 直
+// for 值. Mandarin characters match when they share a reading without tones.
+const readings = new Map();
+function soundsAlike(a, b) {
+  const as = Array.from(a);
+  const bs = Array.from(b);
+  if (as.length !== bs.length) return false;
+  const { pinyin } = require('pinyin-pro');
+  const of = c => {
+    if (!readings.has(c)) readings.set(c, /\p{Script=Han}/u.test(c) ? pinyin(c, { multiple: true, toneType: 'none', type: 'array' }) : [c]);
+    return readings.get(c);
+  };
+  return as.every((c, i) => c === bs[i] || of(c).some(r => of(bs[i]).includes(r)));
+}
+
+const katakana = text => text.replace(/[\u3041-\u3096]/g, c => String.fromCharCode(c.charCodeAt(0) + 0x60));
+
+// Gives each piece of text the reading of its characters. A reading that
+// covers several characters is shared out between them.
+export function spreadReadings(pieces, tokens) {
+  const kana = Array.from(pieces.join(''), () => '');
+  for (const [start, end, reading] of tokens) {
+    const r = Array.from(katakana(reading));
+    const n = end - start;
+    for (let k = 0; k < n && start + k < kana.length; k++) kana[start + k] = r.slice(Math.round(k * r.length / n), Math.round((k + 1) * r.length / n)).join('');
+  }
+  let at = 0;
+  return pieces.map(p => {
+    const length = Array.from(p).length;
+    at += length;
+    return kana.slice(at - length, at).join('');
+  });
+}
+
+// Japanese has many words that sound the same, and Whisper often writes a
+// word in kana that the script writes in kanji. When Python with misaki is
+// there, both sides are compared by their reading.
+export async function readAlike(words, heard, language) {
+  if (language !== 'ja' || !words.length || !heard.length) return { words, heard };
+  try {
+    const spoken = words.map(w => String(w.spoken));
+    const pieces = heard.map(h => String(h.text).trim());
+    const shown = words.map((w, i) => w.display !== undefined && String(w.display) !== spoken[i] ? String(w.display) : null);
+    const extra = shown.filter(s => s !== null);
+    const [a, b, ...c] = await japaneseReadings([spoken.join(''), pieces.join(''), ...extra]);
+    const spokenKana = spreadReadings(spoken, a);
+    const heardKana = spreadReadings(pieces, b);
+    let k = 0;
+    const shownKana = shown.map(s => s === null ? null : spreadReadings([s], c[k++])[0]);
+    return {
+      words: words.map((w, i) => ({ ...w, spoken: spokenKana[i] || w.spoken, display: shown[i] === null ? undefined : shownKana[i] || w.display })),
+      heard: heard.map((h, i) => ({ ...h, text: heardKana[i] || h.text })),
+    };
+  } catch {
+    return { words, heard };
+  }
+}
 
 const NUMBER_WORDS = {
   zero: '0', one: '1', two: '2', three: '3', four: '4', five: '5', six: '6', seven: '7', eight: '8', nine: '9',
@@ -124,8 +194,11 @@ export function similar(a, b) {
 // A word also counts as heard when Whisper writes its shown form, so
 // {SQL|sequel} or {async|a sink} is confirmed by "SQL" or "async".
 export function alignWords(words, heard, duration, language = 'en') {
-  const partsOf = word => expand(word, language);
-  const matches = (a, b) => language !== 'en' && (/\p{N}/u.test(a) || /\p{N}/u.test(b)) ? a === b : similar(a, b);
+  const cjk = ['ja', 'zh'].includes(language);
+  const chars = word => normWord(word).normalize('NFC');
+  const partsOf = word => cjk ? Array.from(language === 'zh' ? simplified(chars(word)) : chars(word)) : expand(word, language);
+  const same = (a, b) => a === b || (language === 'zh' && soundsAlike(a, b));
+  const matches = (a, b) => cjk ? same(a, b) : language !== 'en' && (/\p{N}/u.test(a) || /\p{N}/u.test(b)) ? a === b : similar(a, b);
   const tokens = [];
   words.forEach((w, wi) => {
     const parts = String(w.spoken).split(/\s+/).flatMap(partsOf);
@@ -168,6 +241,7 @@ export function alignWords(words, heard, duration, language = 'en') {
   const INF = 1e9;
   const cost = Array.from({ length: T + 1 }, () => new Float64Array(N + 1).fill(INF));
   const move = Array.from({ length: T + 1 }, () => new Int8Array(N + 1));
+  const shownLength = cjk ? Array.from({ length: T + 1 }, () => new Int32Array(N + 1)) : null;
   cost[0][0] = 0;
   const groupEnd = new Int32Array(T);
   for (let i = 0; i < T; i++) {
@@ -191,6 +265,15 @@ export function alignWords(words, heard, duration, language = 'en') {
         const joined = tokens.slice(i, e + 1).map((t) => t.norm).join('');
         const ok = (groupEnd[i] > i && matches(joined, H[j].norm)) || (tokens[i].shown && matches(tokens[i].shown, H[j].norm));
         if (ok && c < cost[e + 1][j + 1]) { cost[e + 1][j + 1] = c; move[e + 1][j + 1] = 5; }
+      }
+      if (cjk && i < T && tokens[i].first && tokens[i].shown) {
+        const length = Array.from(tokens[i].shown).length;
+        const e = groupEnd[i];
+        if (j + length <= N && same(tokens[i].shown, H.slice(j, j + length).map(h => h.norm).join('')) && c < cost[e + 1][j + length]) {
+          cost[e + 1][j + length] = c;
+          move[e + 1][j + length] = 7;
+          shownLength[e + 1][j + length] = length;
+        }
       }
       if (i < T && j + 1 < N && matches(tokens[i].norm, H[j].norm + H[j + 1].norm) && c < cost[i + 1][j + 2]) {
         cost[i + 1][j + 2] = c;
@@ -224,6 +307,14 @@ export function alignWords(words, heard, duration, language = 'en') {
       matched += i - s;
       i = s;
       j--;
+    } else if (m === 7) {
+      const length = shownLength[i][j];
+      let s = i - 1;
+      while (s > 0 && tokens[s - 1].wi === tokens[i - 1].wi) s--;
+      add(tokens[i - 1].wi, H[j - length].start, H[j - 1].end, i - s);
+      matched += i - s;
+      i = s;
+      j -= length;
     } else if (m === 6) { add(tokens[i - 1].wi, H[j - 2].start, H[j - 1].end); matched++; i--; j -= 2; }
     else break;
   }

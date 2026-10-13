@@ -4,8 +4,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { speechChunks, resolveMarks } from './script.js';
-import { alignWords } from './align.js';
+import { speechChunks, resolveMarks, normWord } from './script.js';
+import { alignWords, readAlike } from './align.js';
 import { loadTTS, transcribeWords, TTS_MODEL, TTS_SAMPLE_RATE, ttsDtype, asrModel } from './models.js';
 import { phonemize, generateSpeech } from './phonemes.js';
 import { writeWav, readWav, resample, trimSilence } from './wav.js';
@@ -59,7 +59,7 @@ export async function synthesize(project, { force = false, log = () => {}, only 
   const result = {};
   const todo = [];
   for (const scene of project.script.scenes) {
-    const chunks = speechChunks(scene.units, { sentenceGap: config.sentenceGap, paragraphGap: config.paragraphGap, pace: config.pace });
+    const chunks = speechChunks(scene.units, { sentenceGap: config.sentenceGap, paragraphGap: config.paragraphGap, pace: config.pace, language: config.language });
     const recording = recordings?.files[scene.id];
     const hash = sceneHash(scene, chunks, config, recording ? {
       content: recording.hash,
@@ -144,13 +144,14 @@ async function synthesizeScene(project, scene, chunks, hash, tts, log) {
 
     const heard = await transcribeWords(resample(samples, sr, 16000), { log, language: config.language });
     transcripts.push(heard.text);
-    const aligned = alignWords(chunk.words, heard.words, dur, config.language);
+    const alike = await readAlike(chunk.words, heard.words, config.language);
+    const aligned = alignWords(alike.words, alike.heard, dur, config.language);
     chunk.words.forEach((w, k) => {
       const a = aligned.words[k];
       wordTimes[w.unitIndex] = { start: start + a.start, end: start + a.end, matched: a.matched };
       if (!a.matched) unmatched.push(w.display);
     });
-    const tokens = chunk.words.reduce((n, w) => n + w.spoken.split(/\s+/).length, 0);
+    const tokens = chunk.words.reduce((n, w) => n + (['ja', 'zh'].includes(config.language) ? Array.from(normWord(w.spoken).normalize('NFC')).length : w.spoken.split(/\s+/).length), 0);
     totalTokens += tokens;
     matchedTokens += aligned.matchRate * tokens;
     chunkInfo.push({ start, end: start + dur, text: chunk.text });
@@ -209,7 +210,8 @@ async function recordingScene(project, scene, hash, source, take, cut, heardTake
     words: heardTake.words.filter((w) => w.start >= cut.start && w.start < cut.end).map(local),
   } : await transcribeWords(resample(samples, sr, 16000), { log, language: config.language });
   const units = scene.units.filter((u) => u.type === 'word');
-  const aligned = alignWords(units, heard.words, duration, config.language);
+  const alike = await readAlike(units, heard.words, config.language);
+  const aligned = alignWords(alike.words, alike.heard, duration, config.language);
   const times = cut ? cut.words.map(local) : aligned.words;
   const wordTimes = [];
   let wi = 0;

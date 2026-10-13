@@ -6,7 +6,7 @@ import path from 'node:path';
 import { tokenizeNarration, parseScript, speechChunks, normWord, resolveMarks } from '../src/script.js';
 import { alignWords, readAlike, spreadReadings } from '../src/align.js';
 import { subtitleCues, toSrt, toVtt } from '../src/subtitles.js';
-import { buildPhrases, drawCaptions } from '../engine/captions.js';
+import { buildPhrases, drawCaptions, clingsToPrevious } from '../engine/captions.js';
 import { getTheme } from '../engine/themes.js';
 import { phonemize, misakiAvailable } from '../src/phonemes.js';
 import { languageFonts, ensureFonts } from '../src/fonts.js';
@@ -86,6 +86,27 @@ for (const [language, text] of Object.entries(native)) {
     assert.throws(() => subtitleCues({ language, scenes: [{ words: [{ text: '長'.repeat(19) }] }] }), /longer than 18/);
   });
 }
+
+test('subtitle lines and caption phrases do not start with a Japanese or Chinese particle', () => {
+  const timed = list => list.map((text, i) => ({ text, start: i * 0.3, end: (i + 1) * 0.3 }));
+  const ja = timed(['地球', 'の', '動き', 'と', 'カレンダー', 'に', 'ズレ', 'が', 'たまり', 'ます。']);
+  const [cue] = subtitleCues({ language: 'ja', scenes: [{ start: 0, words: ja }] });
+  assert.equal(cue.text, '地球の動きとカレンダーに\nズレがたまります。');
+  const phrases = buildPhrases({ language: 'ja', scenes: [{ start: 0, words: ja }] }, 46);
+  assert.equal(phrases.length, 2);
+  assert.ok(phrases.every(p => !/^[\u3041-\u3096]/.test(p.words[0].text)), phrases.map(p => p.words.map(w => w.text).join('')).join(' / '));
+  const [counter] = subtitleCues({ language: 'ja', scenes: [{ start: 0, words: timed(['そこで、', '基本', 'は', '4', '年', 'ごと', 'に', '1', '日', 'を', '足し', 'ます。']) }] });
+  assert.equal(counter.text, 'そこで、基本は4年ごとに\n1日を足します。');
+  const clings = clingsToPrevious('ja');
+  for (const [text, before] of [['は', '基本'], ['せん', 'ありま'], ['ませんでした。', 'あり'], ['暦', 'グレゴリオ'], ['年', '4'], ['しょう', 'ので']]) assert.equal(clings(text, before), true, text);
+  for (const [text, before] of [['うるう年', 'は'], ['ありま', 'では'], ['足', 'を'], ['地球', 'の'], ['カレンダー', 'の'], ['1', 'に']]) assert.equal(clings(text, before), false, text);
+  // Breaking before or after に balances the lines equally; に stays with the word before.
+  const [even] = subtitleCues({ language: 'ja', scenes: [{ start: 0, words: timed(['アイウエオカキクケ', 'に', 'サシスセソタチツテ。']) }] });
+  assert.equal(even.text, 'アイウエオカキクケに\nサシスセソタチツテ。');
+  const zh = timed(['这', '是', '我们', '最', '常用', '的', '密码', '保存', '方法', '之一', '，', '也', '很', '安全', '的', '做法', '吗', '？']);
+  for (const p of buildPhrases({ language: 'zh', scenes: [{ start: 0, words: zh }] }, 46)) assert.ok(!['的', '吗'].includes(p.words[0].text), p.words.map(w => w.text).join(''));
+  for (const c of subtitleCues({ language: 'zh', scenes: [{ start: 0, words: zh }] })) for (const line of c.text.split('\n')) assert.ok(!/^[的吗]/.test(line), line);
+});
 
 test('Mandarin alignment reads Traditional characters as Simplified, Japanese keeps them', () => {
   const rate = language => alignWords([{ spoken: '浏览器' }, { spoken: '会询问网址。' }], [{ text: '瀏覽器會詢問網址', start: 0, end: 1.6 }], 1.6, language).matchRate;
@@ -168,6 +189,7 @@ test('Python batches JSON lines without shell expansion and accepts misaki phone
     const texts = ['解析。\n次の行', '$(　) `＊` "中文" $@'];
     assert.deepEqual(await phonemize(texts, language), texts.map(t => t + '↗'));
     assert.equal(misakiAvailable(language), true);
+    assert.deepEqual(await phonemize(['およそ365.2422日。'], language), [language === 'ja' ? 'およそ365点二四二二日。↗' : 'およそ365.2422日。↗']);
     // Latin words are read as English between the misaki pieces.
     assert.deepEqual(await phonemize(['我用JavaScript写代码。', 'API。'], language), ['我用↗ dʒˈɑːvə skɹˈɪpt 写代码。↗', 'ˌeɪpˌiːˈaɪ 。↗']);
   }

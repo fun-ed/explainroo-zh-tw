@@ -88,7 +88,9 @@ When you ask, put everything you need in one message. Typical reasons to ask:
    check confirmed. If a word is not confirmed, the voice probably said it
    wrong. Fix it with `{shown|spoken}` in the script and run the command
    again. For a recording, make script.md say what was actually said.
-   Only the scenes you changed are made again.
+   Only the scenes you changed are made again. `check`, `still`, `sheet`,
+   `render` and `preview` also make missing narration, so start them after
+   `voice` has finished, not at the same time.
 
 5. **Plan the pictures.** For each scene, decide what is on screen when each
    marker or important word is spoken. Decide where each thing sits and what
@@ -175,7 +177,8 @@ something to a friend at a table.
 Length and pace:
 
 - Aim for 45 to 120 seconds unless the user says otherwise. A finished video
-  has about 150 words a minute, pauses included.
+  has about 150 words a minute, pauses included. In Japanese it is about 270
+  characters a minute, and in Chinese about 200.
 - Start with the question or problem. Explain it in small steps. Give one
   concrete example, then sum up.
 - One idea per scene, usually 1 to 3 sentences (4 to 15 seconds).
@@ -362,7 +365,12 @@ match whole words. Put a `[#marker]` where you need a moment inside a word.
 Sentences end with `。`, `！` or `？`.
 
 Latin words such as API or JavaScript are read in English. For a Japanese
-reading, write it out: `{API|エーピーアイ}`.
+reading, write it out: `{API|エーピーアイ}`. Numbers can stay in digits,
+including decimals like 365.2422. The Japanese reader sometimes picks the
+wrong reading for a word, such as ついたち for 一日 (write `1日` for
+いちにち) or こよみ for 暦 in グレゴリオ暦 (write `{グレゴリオ暦|グレゴリオれき}`).
+When the speech check flags a word, compare what it heard with the script
+before you change anything.
 
 Whisper often writes a word with other characters that sound the same, so
 the speech check compares sounds. Japanese is compared by its kana reading,
@@ -683,8 +691,9 @@ same. `render --out` still sets the file name you choose.
 
 ## Pace
 
-`pace` makes the whole video quicker or slower. At 1.3 the voice speaks 30%
-faster. The pauses, the time before and after each scene, the transitions and
+`pace` makes the whole video quicker or slower. At 1.3 the voice speaks about
+30% faster. The voice model does not speed up exactly, so check the length
+`voice` reports. The pauses, the time before and after each scene, the transitions and
 every animation also get 30% shorter. Word and marker cues follow the voice.
 So if you tie pictures to words, the rhythm stays right at any pace. Times in
 seconds are real seconds of the scene, like `s.t` and `s.cue()`. So

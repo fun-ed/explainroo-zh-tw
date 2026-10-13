@@ -84,14 +84,16 @@ function uploadFile(projectDir, rel) {
   if (realProbe !== realProject && !underRoot(realProbe)) return null;
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   if (!underRoot(fs.realpathSync(path.dirname(dest)))) return null;
-  // lstat, not existsSync: a symlink to a missing file must be refused too.
-  let link = false;
+  return isSymlink(dest) ? null : dest;
+}
+
+// lstat, not existsSync: a symlink to a missing file must be refused too.
+function isSymlink(p) {
   try {
-    link = fs.lstatSync(dest).isSymbolicLink();
+    return fs.lstatSync(p).isSymbolicLink();
   } catch {
-    link = false;
+    return false;
   }
-  return link ? null : dest;
 }
 
 export function startServer({ projectDir, getState, port = 0 }) {
@@ -114,7 +116,38 @@ export function startServer({ projectDir, getState, port = 0 }) {
         if (!dest) return send(res, 400, 'uploads go to build/ or out/');
         const chunks = [];
         for await (const c of req) chunks.push(c);
-        fs.writeFileSync(dest, Buffer.concat(chunks));
+        const body = Buffer.concat(chunks);
+        // Chunked upload (engine/upload.js): the pieces of one upload carry its
+        // random id and their byte offset, and are assembled in
+        // "<dest>.<id>.part" next to the target, which replaces the target only
+        // when the last piece has arrived. A piece at the wrong offset is
+        // refused, an interrupted upload never leaves a half-written file under
+        // the real name, and a new upload of the same file (offset 0) removes
+        // older partial uploads, so a stale or competing upload fails instead
+        // of mixing bytes into the result.
+        if (url.searchParams.has('offset')) {
+          const rawOffset = url.searchParams.get('offset');
+          const offset = Number(rawOffset);
+          if (!/^\d+$/.test(rawOffset) || !Number.isSafeInteger(offset)) return send(res, 400, 'offset must be a non-negative integer');
+          const id = url.searchParams.get('upload') || '';
+          if (!/^[0-9a-f]{16,64}$/.test(id)) return send(res, 400, 'upload must be a hexadecimal upload id');
+          const part = `${dest}.${id}.part`;
+          if (isSymlink(part)) return send(res, 400, 'uploads go to build/ or out/');
+          if (offset === 0) {
+            const stale = new RegExp(`^${path.basename(dest).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.[0-9a-f]{16,64}\\.part$`);
+            for (const name of fs.readdirSync(path.dirname(dest))) {
+              if (stale.test(name)) fs.rmSync(path.join(path.dirname(dest), name), { force: true });
+            }
+            fs.writeFileSync(part, body);
+          } else {
+            const have = fs.existsSync(part) ? fs.statSync(part).size : null;
+            if (have !== offset) return send(res, 409, `upload piece out of order: expected offset ${have ?? 0}, got ${offset}`);
+            fs.appendFileSync(part, body);
+          }
+          if (url.searchParams.get('last') === '1') fs.renameSync(part, dest);
+          return send(res, 200, 'ok');
+        }
+        fs.writeFileSync(dest, body);
         return send(res, 200, 'ok');
       }
       if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'method not allowed');

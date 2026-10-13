@@ -9,14 +9,10 @@
 <canvas id="c"></canvas>
 <script type="module">
 import { boot, renderAudio } from '/engine/runtime.js';
+import { upload } from '/engine/upload.js';
 
 const canvas = document.getElementById('c');
 const scale = Number(new URLSearchParams(location.search).get('scale') || 1);
-
-async function upload(path, body) {
-  const res = await fetch('/__upload?path=' + encodeURIComponent(path), { method: 'PUT', body });
-  if (!res.ok) throw new Error(`upload ${path} failed: ${await res.text()}`);
-}
 
 function describe(e) {
   const where = e.scene ? ` (scene "${e.scene}" at ${Number(e.sceneTime).toFixed(2)}s)` : '';

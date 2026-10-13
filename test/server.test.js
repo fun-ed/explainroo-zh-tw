@@ -20,6 +20,82 @@ function request(port, { method = 'GET', path: p, host = `127.0.0.1:${port}`, or
   });
 }
 
+test('chunked uploads are assembled in order and appear only when complete', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'explainroo-chunks-'));
+  fs.writeFileSync(path.join(dir, 'scenes.js'), 'export default {};');
+  const server = await startServer({ projectDir: dir, getState: () => ({}) });
+  try {
+    const port = server.port;
+    const put = (p, query, body) => request(port, { method: 'PUT', path: `/__upload?path=${encodeURIComponent(p)}${query}`, body });
+    const piece = (p, id, offset, body, last = false) => put(p, `&upload=${id}&offset=${offset}${last ? '&last=1' : ''}`, body);
+    const A = 'a'.repeat(32);
+    const B = 'b'.repeat(32);
+    const build = path.join(dir, 'build');
+    const mix = path.join(build, 'mix.wav');
+    const parts = () => fs.readdirSync(build).filter((n) => n.endsWith('.part'));
+    fs.mkdirSync(build, { recursive: true });
+    fs.writeFileSync(mix, 'old');
+
+    // pieces in order; the existing file is replaced only by the last piece
+    assert.equal((await piece('build/mix.wav', A, 0, 'aaa')).status, 200);
+    assert.equal((await piece('build/mix.wav', A, 3, 'bbb')).status, 200);
+    assert.equal(fs.readFileSync(mix, 'utf8'), 'old');
+    // a piece at the wrong offset is refused and changes nothing
+    assert.equal((await piece('build/mix.wav', A, 99, 'zzz')).status, 409);
+    assert.equal((await piece('build/mix.wav', A, 6, 'cc', true)).status, 200);
+    assert.equal(fs.readFileSync(mix, 'utf8'), 'aaabbbcc');
+    assert.deepEqual(parts(), []);
+
+    // uploading the same file again replaces the completed destination
+    assert.equal((await piece('build/mix.wav', B, 0, 'second', true)).status, 200);
+    assert.equal(fs.readFileSync(mix, 'utf8'), 'second');
+
+    // an interrupted upload leaves only its part file; a new upload starts clean
+    assert.equal((await piece('build/mix.wav', A, 0, 'xxxx')).status, 200);
+    assert.equal((await piece('build/mix.wav', A, 4, 'yyyy')).status, 200);
+    assert.equal(fs.readFileSync(mix, 'utf8'), 'second');
+    assert.equal((await piece('build/mix.wav', B, 0, 'fresh')).status, 200);
+    assert.equal((await piece('build/mix.wav', B, 5, '!', true)).status, 200);
+    assert.equal(fs.readFileSync(mix, 'utf8'), 'fresh!');
+    assert.deepEqual(parts(), []);
+
+    // a competing upload never mixes bytes: the older one fails, the newer one wins
+    assert.equal((await piece('build/mix.wav', A, 0, '1111')).status, 200);
+    assert.equal((await piece('build/mix.wav', B, 0, '2222')).status, 200);
+    assert.equal((await piece('build/mix.wav', A, 4, '1111', true)).status, 409);
+    assert.equal(fs.readFileSync(mix, 'utf8'), 'fresh!');
+    assert.equal((await piece('build/mix.wav', B, 4, '2222', true)).status, 200);
+    assert.equal(fs.readFileSync(mix, 'utf8'), '22222222');
+
+    // a continuation without a started upload is refused
+    assert.equal((await piece('build/other.wav', A, 5, 'x', true)).status, 409);
+    assert.ok(!fs.existsSync(path.join(build, 'other.wav')));
+    // malformed offsets and upload ids are refused
+    for (const bad of ['-1', '1.5', 'abc', '']) assert.equal((await put('build/mix.wav', `&upload=${A}&offset=${bad}`, 'x')).status, 400);
+    for (const bad of ['', 'short', '../../scenes', 'A'.repeat(32), 'g'.repeat(32)]) assert.equal((await put('build/mix.wav', `&upload=${bad}&offset=0`, 'x')).status, 400);
+    // an empty upload is one last piece at offset 0
+    assert.equal((await piece('out/empty.bin', A, 0, '', true)).status, 200);
+    assert.equal(fs.statSync(path.join(dir, 'out', 'empty.bin')).size, 0);
+    // the single-request form keeps working, under the same path rules
+    assert.equal((await put('out/single.txt', '', 'one')).status, 200);
+    assert.equal(fs.readFileSync(path.join(dir, 'out', 'single.txt'), 'utf8'), 'one');
+
+    // chunked uploads obey the same path rules, and the part file cannot be a symlink
+    assert.equal((await piece('build/../scenes.js', A, 0, 'x', true)).status, 400);
+    assert.equal((await piece('assets/x.png', A, 0, 'x', true)).status, 400);
+    assert.equal(fs.readFileSync(path.join(dir, 'scenes.js'), 'utf8'), 'export default {};');
+    fs.symlinkSync(path.join(dir, 'scenes.js'), path.join(build, `trap.wav.${A}.part`));
+    assert.equal((await piece('build/trap.wav', A, 0, 'x', true)).status, 400);
+    assert.equal(fs.readFileSync(path.join(dir, 'scenes.js'), 'utf8'), 'export default {};');
+    // removing a stale part never follows a symlink to its target
+    assert.equal((await piece('build/trap.wav', B, 0, 'x', true)).status, 200);
+    assert.equal(fs.readFileSync(path.join(dir, 'scenes.js'), 'utf8'), 'export default {};');
+  } finally {
+    await server.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('the preview server keeps secrets and sources safe', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'explainroo-server-'));
   fs.writeFileSync(path.join(dir, '.env'), 'OPENROUTER_API_KEY=secret');

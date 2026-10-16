@@ -6,11 +6,13 @@ the words and the pictures. explainroo makes the video.
 
 explainroo turns two files into an MP4 video with narration. `script.md`
 holds what the voice says. `scenes.js` draws what the viewer sees. Every
-drawing can appear on a word the voice says. A voice model (Kokoro) reads the
-script on this computer. Whisper listens to the recording and writes down
-when each word is spoken. Chrome draws the frames in the background.
+drawing can appear on a word the voice says. A voice model (Kokoro) reads
+the script on this computer, or the narration comes from ElevenLabs or your
+own recording. Whisper listens to the narration and writes down when each
+word is spoken. Chrome draws the frames in the background.
 explainroo adds music and sound effects, and ffmpeg makes the MP4. You need
-no API key unless the user wants AI images.
+no API key for local voices or recordings. ElevenLabs and AI images need
+keys.
 
 The full documentation for people is at https://www.explainroo.com/docs/.
 
@@ -32,10 +34,13 @@ npm install
 node bin/explainroo.js doctor --fetch
 ```
 
-`doctor` checks Node, ffmpeg and Chrome. It also downloads the speech models,
-about 400 MB, the first time only. If the user ran `npm link`, you can write
-`explainroo` instead of `node bin/explainroo.js` in the commands below. Every
-command takes the project folder first and accepts `--json`.
+`doctor` checks Node, ffmpeg and Chrome, and the extra programs some
+languages need. It also downloads the English speech models, about 400 MB,
+the first time only. Other languages fetch their speech check model on first
+use. If the user ran `npm link`, you
+can write `explainroo` instead of `node bin/explainroo.js` in the commands
+below. Commands that work on a video take the project folder first, and every
+command accepts `--json`.
 
 ### When to ask the user
 
@@ -45,6 +50,7 @@ When you ask, put everything you need in one message. Typical reasons to ask:
 
 - The topic is unclear, or you need a fact you cannot check.
 - The user wants AI images and there is no OpenRouter key (see Images).
+- The user wants ElevenLabs and there is no ElevenLabs key (see Voices).
 - The user wants something explainroo cannot do, like video shot with a
   camera.
 
@@ -62,8 +68,9 @@ When you ask, put everything you need in one message. Typical reasons to ask:
 
    Projects go in `videos/`. Git ignores that folder. Pick the look that fits
    the audience: `paper` (friendly, hand drawn, the default), `clean`
-   (products and business), `chalk` (teaching), `blueprint` (engineering) or
-   `midnight` (developer tools). Pick the size for the place the video goes,
+   (products and business), `chalk` (teaching), `blueprint` (engineering),
+   `midnight` (developer tools) or `editorial` (essays, history, money and
+   other thoughtful topics). Pick the size for the place the video goes,
    for example `--size tiktok` or `--size linkedin`. The sizes are listed in
    "Sizes for each platform" below. Add `--pace 1.2` when the user wants a
    quicker video.
@@ -80,7 +87,10 @@ When you ask, put everything you need in one message. Typical reasons to ask:
    The command prints how long each scene is and how many words the speech
    check confirmed. If a word is not confirmed, the voice probably said it
    wrong. Fix it with `{shown|spoken}` in the script and run the command
-   again. Only the scenes you changed are made again.
+   again. For a recording, make script.md say what was actually said.
+   Only the scenes you changed are made again. `check`, `still`, `sheet`,
+   `render` and `preview` also make missing narration, so start them after
+   `voice` has finished, not at the same time.
 
 5. **Plan the pictures.** For each scene, decide what is on screen when each
    marker or important word is spoken. Decide where each thing sits and what
@@ -133,12 +143,17 @@ When you ask, put everything you need in one message. Typical reasons to ask:
     node bin/explainroo.js verify videos/<name>
     ```
 
-    `render` makes the video. `verify` measures the loudness and looks for
+    `render` also writes subtitle files (`.srt` and `.vtt`) and a cover
+    image (`.cover.jpg`) next to the video. When scenes name chapters, it
+    writes `.chapters.txt` for the YouTube description and adds the chapters
+    to the MP4. `--format gif` makes a silent GIF instead, for a README or a
+    post. `verify` checks the MP4. It measures the loudness and looks for
     black frames and silence. It also runs the speech check on the finished
     sound to make sure the voice is still clear over the music.
 
-11. **Tell the user** where `out/video.mp4` is, how long it is, what verify
-    said, and what you could not check.
+11. **Tell the user** where the video and its subtitle files, chapters and
+    cover are, how long the video is, what verify said, and what you could
+    not check.
 
 ## How to write the narration
 
@@ -162,7 +177,8 @@ something to a friend at a table.
 Length and pace:
 
 - Aim for 45 to 120 seconds unless the user says otherwise. A finished video
-  has about 150 words a minute, pauses included.
+  has about 150 words a minute, pauses included. In Japanese it is about 270
+  characters a minute, and in Chinese about 200.
 - Start with the question or problem. Explain it in small steps. Give one
   concrete example, then sum up.
 - One idea per scene, usually 1 to 3 sentences (4 to 15 seconds).
@@ -192,14 +208,19 @@ Narration for this scene. [#marker] A marker names a moment you can animate on.
   be, in seconds), `lead` (seconds before the voice, default 0.35) and
   `transition` (`fade`, `slide`, `wipe`, `zoom`, `brush`, `cut`).
 - A scene without narration lasts `min` seconds (default 3).
+- `chapter="How the resolver finds it"` in a scene's braces starts a
+  chapter at that scene. It lasts until the next chapter. Titles have 1 to
+  60 characters. If the first scene names no chapter, the first chapter is
+  the video title. YouTube shows chapters only when there are at least 3
+  and each lasts 10 seconds or more.
 
 ## What makes the pictures good
 
 - **Show it when it is said.** A picture appears as the voice mentions it.
   Use word cues.
-- **Something changes every 2 to 4 seconds.** A new element, an arrow, a
-  highlight or a camera move. `check` points out long stretches where nothing
-  moves.
+- **Something changes every 2 to 4 seconds.** A new element, an arrow or a
+  highlight. The camera adds its own moves. `check` points out long stretches
+  where nothing new appears.
 - **Short screen text.** Labels, numbers and key phrases of a few words. The
   whole narration never goes on screen. When the narration should be readable,
   turn on captions (`"captions": true`). Then do not also show the sentence
@@ -213,6 +234,223 @@ Narration for this scene. [#marker] A marker names a moment you can animate on.
 - **Real examples.** A command you can run, a number with its source or a
   picture of the real screen is better than three boxes with general words.
 - **A clear last frame** that shows the main point.
+
+### The camera
+
+explainroo films each scene with a camera that follows the narration. It
+opens on the picture. When a scene starts small, the camera starts close and
+widens as new things need room. Something new that already fits the shot
+needs no move. Now and then the camera moves in on what the voice talks
+about, for example a new card and the one it relates to, when the viewer has
+time to look. Then it follows new things at that distance. Near the end of
+the scene it pulls back, so the last frame shows the whole idea. During each
+scene it also pushes in very slowly.
+
+While a shot holds, every card and label is either fully in the shot or out
+of it. Arrows and lines may run off the edge. While the camera moves from
+one shot to the next, things may pass the edge of the frame for a moment.
+Shots stay clear of the captions and of the parts the app covers on Shorts,
+TikTok and Reels.
+
+Lay out each scene as one picture on the full frame, the way it should look
+at the end, and let the camera find the close-ups:
+
+- Put the next element near the one it follows, so one shot shows both.
+- A scene that starts with one thing and grows gets the most camera moves.
+  The camera starts close and widens with the picture.
+- Keep a box with its label, or an icon with its caption, together as one
+  unit. Things far apart get their own shots.
+- Lines, arrows and things added inside an element already on screen, like
+  a line in a chart, get no close-up of their own. Use `s.focus` when one
+  should.
+- When a scene goes on with the same picture, draw the carried elements with
+  `at: -1` in the same places. The camera then goes on from where it
+  stopped, and the two scenes fade into each other.
+
+The camera measures every element, including what `s.draw` draws, and
+follows the `at` and `out` times. Anything drawn straight on `s.ctx` counts
+as one block that is there for the whole scene, so the camera keeps it whole
+and cannot film it on its own. Use `s.draw` for a drawing that appears on a
+cue. Highlighted code lines and terminal commands get close-ups of their own
+when they are small in the shot. `s.focus` points the camera at any part of
+the picture.
+
+`s.camera([...])` in a scene takes over that scene's camera, and
+`s.camera([])` keeps the scene still. `"camera": "still"` in `video.json`
+turns the camera off for the whole video. `check` checks the layout as you
+wrote it, without the camera. Stills, sheets and renders show the camera.
+
+The final render adds motion blur to frames where something moves, like a
+film camera. Drafts skip it. `"motionBlur": false` turns it off.
+
+## Voices
+
+Kokoro runs on this computer and needs no key. Pick a voice with
+`explainroo voices`. A string in `video.json` keeps using Kokoro:
+
+```json
+"voice": "af_heart"
+```
+
+`{ "provider": "kokoro", "id": "af_heart" }` means the same thing.
+
+ElevenLabs offers premium and cloned voices. It costs money on the user's
+account and receives the script text. If the user wants it and there is no
+key, ask them for an API key from elevenlabs.io. Set `ELEVENLABS_API_KEY` in
+the environment, or save `ELEVENLABS_API_KEY=...` in a `.env` file in the
+project folder or the explainroo folder. The environment takes priority,
+then the project file. Never print the key, and never put it in a script,
+a commit or a log. Keep `.env` out of git.
+
+```bash
+node bin/explainroo.js voices videos/<name> --elevenlabs
+node bin/explainroo.js voices videos/<name> --elevenlabs --json
+```
+
+The list shows the names, ids and labels available to that key. Use an id
+in `video.json`:
+
+```json
+"voice": { "provider": "elevenlabs", "id": "JBFqnCBsd6RMkjVDRZzb", "model": "eleven_multilingual_v2" }
+```
+
+`model` is optional and defaults to `eleven_multilingual_v2`. The voice
+command reports the characters used. Each request is saved in
+`build/voice/elevenlabs-usage.jsonl`, without the key or script text.
+ElevenLabs uses `speed` times `pace`, limited to 0.7 through 1.2.
+The voice command tells you when it uses that limit.
+
+You can also record the narration yourself. Use a quiet room and read
+script.md as written. Put one take for the whole video in `assets/`:
+
+```json
+"voice": { "provider": "recording", "src": "assets/narration.m4a" }
+```
+
+Or put one file per scene in a folder:
+
+```json
+"voice": { "provider": "recording", "src": "assets/narration/" }
+```
+
+Each scene with narration needs `<scene-id>.<ext>`, for example `intro.wav`.
+Supported formats are wav, mp3, m4a, aac, flac, ogg and opus. Files must stay
+inside `assets/`, with no `..` in the path.
+
+One take is split into scenes using the words in script.md. Each cut keeps
+about 0.15 seconds around the speech. Pauses within a scene stay as recorded.
+The scene's `lead` and `hold` add the gaps between scenes. Recordings are
+made mono and their volume is brought close to Kokoro's. Their sample rate
+is kept up to 48 kHz. Changing `pace` or an explicit `speed` changes their
+tempo without changing pitch.
+
+`[pause]`, `sentenceGap` and `paragraphGap` do not add silence to recordings.
+Markers `[#name]`, captions, cues and `{shown|spoken}` still work. If the
+speech check reports a mismatch, make script.md say what was actually said.
+Replacing a scene recording makes that scene again. Replacing a whole take
+makes all its scenes again.
+
+ElevenLabs narration and recordings work in every supported language.
+Run `voice`, `check` and `render` as usual with any of the three sources.
+
+## Videos in other languages
+
+Set `language` in `video.json` to `en`, `es`, `fr`, `it`, `pt-br`, `hi`,
+`ja` or `zh`. English is the default. `pt-br` means Brazilian Portuguese and
+`zh` Mandarin Chinese. You can also start with
+`explainroo init videos/my-video --language es`.
+
+When `voice` is left out, the language picks its Kokoro voice:
+
+| Language | Default voice |
+|---|---|
+| English (`en`) | `af_heart` |
+| Spanish (`es`) | `ef_dora` |
+| French (`fr`) | `ff_siwis` |
+| Italian (`it`) | `if_sara` |
+| Brazilian Portuguese (`pt-br`) | `pf_dora` |
+| Hindi (`hi`) | `hf_alpha` |
+| Japanese (`ja`) | `jf_alpha` |
+| Mandarin Chinese (`zh`) | `zf_xiaobei` |
+
+Run `explainroo voices --language es` to see voices for one language.
+A Kokoro voice must match the video's language. If a project already has
+`voice` set, change it too, or remove it to use the default.
+
+Write the narration in that language as a person would say it. Do not
+translate English word for word. The writing rules above apply in spirit.
+Cue words and `[#markers]` work the same. `at: 'qué'` matches "Qué".
+Hindi sentences can end with `।`. Captions and subtitle files keep the
+written text. The looks include a Hindi font, so no system font is needed.
+
+Spanish, French, Italian, Portuguese and Hindi need the espeak-ng program.
+Install it on Linux
+with `sudo apt install espeak-ng`, or on macOS with `brew install espeak-ng`.
+On Windows, use the installer from the
+[espeak-ng releases page](https://github.com/espeak-ng/espeak-ng/releases).
+If the program is in another place, set `EXPLAINROO_ESPEAK` to its binary.
+English, Japanese, Chinese, ElevenLabs and recordings do not need it.
+
+### Japanese and Chinese
+
+Japanese and Chinese need Python 3 with misaki, the pronunciation library
+Kokoro's voices were trained with. Install what the language needs:
+
+```bash
+python3 -m pip install "misaki[ja]"   # Japanese
+python3 -m unidic download            # Japanese dictionary, about 526 MB
+python3 -m pip install "misaki[zh]"   # Chinese
+```
+
+On Windows, write `python` instead of `python3`. If misaki is in a virtual
+environment, set `EXPLAINROO_PYTHON` to that environment's Python.
+ElevenLabs and recordings need neither.
+
+Write the narration as usual, without spaces between words. explainroo
+finds the words itself, so cue words and markers work: `at: '解析'` matches
+the word 解析, and a phrase like `at: '名前の解析'` works too. A cue must
+match whole words. Put a `[#marker]` where you need a moment inside a word.
+Sentences end with `。`, `！` or `？`.
+
+Latin words such as API or JavaScript are read in English. For a Japanese
+reading, write it out: `{API|エーピーアイ}`. Numbers can stay in digits,
+including decimals like 365.2422. The Japanese reader sometimes picks the
+wrong reading for a word, such as ついたち for 一日 (write `1日` for
+いちにち) or こよみ for 暦 in グレゴリオ暦 (write `{グレゴリオ暦|グレゴリオれき}`).
+When the speech check flags a word, compare what it heard with the script
+before you change anything.
+
+Whisper often writes a word with other characters that sound the same, so
+the speech check compares sounds. Japanese is compared by its kana reading,
+so 世紀 heard as 正規 still counts. Chinese is compared by pinyin without
+tones, and Traditional and Simplified characters count as the same. So do
+not reword a sentence only because Whisper chose other characters. Captions
+and subtitles join words without spaces, with up to 18 characters per
+subtitle line, and never break inside a word. Keep the shown text of an
+override short.
+
+The looks' fonts have no Japanese or Chinese characters. The first `voice`,
+`still` or `render` downloads Noto Sans JP or Noto Sans SC, regular and bold,
+about 33 MB, and checks the files. They are saved in
+`~/.cache/explainroo/fonts/` (or `$EXPLAINROO_CACHE/fonts/`) and used in
+every look, in captions and in app screens. After that first download,
+`EXPLAINROO_OFFLINE=1` works. A web player made with `export` keeps only
+the characters the video shows, so its fonts stay small.
+
+The first speech check in another language downloads multilingual Whisper
+small. `doctor --fetch` still fetches only the English models. `verify`
+uses the video's language to check the finished sound too.
+
+If a symbol, short form or word sounds wrong, use `{shown|spoken}` in
+`script.md` and run `voice` again. Put the pronunciation in the same
+language. The speech check accepts digits for numbers. It does not try to
+match spelled numbers to digits outside English. Write the digits, or use
+an override whose spoken text has digits when that helps the check.
+
+In Hindi, the speech check confirms fewer words than in the other languages,
+because the speech model knows Hindi less well. A few unconfirmed words are
+normal there. Fix a word when it stays unconfirmed in several scenes, or
+when the user hears it wrong.
 
 ## Images
 
@@ -261,6 +499,34 @@ buttons, dropdowns, toggles and status labels in the app's colors and fonts.
 A mouse pointer clicks through the screens and types into the fields, and the
 camera zooms in on what the voice talks about. `examples/unspar-demo` is a
 complete one.
+
+**Capture the live site first.**
+
+```bash
+node bin/explainroo.js capture videos/<name> https://example.com --mobile
+```
+
+`capture` opens the page in a fresh browser, without cookies or logins, and
+saves what a demo needs in `assets/capture/<hostname>/`:
+
+- `page.png` (the first screen) and `full.png` (the whole page, up to 8000
+  pixels tall), at twice the pixel density, so they stay sharp when the
+  camera zooms in. `--mobile` adds `mobile.png` and `mobile-full.png`.
+- `capture.json` with the colors, fonts, logo candidates and the page's
+  wording: headings, navigation, buttons and form labels. Copy the wording
+  exactly. The live site is the source of truth for claims and wording.
+- Up to three logo files, and the font files that come from Google Fonts, in
+  the weights the page uses.
+
+It prints a `brand` and `fonts` block to paste into `video.json`. Check it
+against the screenshots. Fonts built into explainroo need no files. For other
+fonts, get the files, check the license and copy the license file next to
+them. Cookie banners and chat widgets can appear in the screenshots, as they
+do for any visitor. Use a screenshot, or a part of one, without them.
+Capturing the same site again replaces its folder.
+
+You can also show a real screen recording with `s.clip` in a `browser`
+frame. Use `s.camera` to zoom in on the detail the voice mentions.
 
 **Keep it true.** A demo is advertising, so everything in it has to be right.
 
@@ -390,6 +656,10 @@ and reuses them. Do the same if you add your own blur.
 
 ## Traditional Chinese (Taiwan) videos
 
+`--language zh-TW` also works. It selects this fork's Taiwan voices;
+upstream `--language zh` selects Kokoro Mandarin. Existing `video.json`
+files with a Taiwan voice and no `language` keep working.
+
 When the user wants a Chinese video (繁體中文、台灣口音), start the project
 with `--lang zh-TW`:
 
@@ -483,9 +753,10 @@ Chinese (`'超視距*雷達*'`). Chinese text uses the system's Traditional
 Chinese font (PingFang TC on macOS; install Noto Sans TC elsewhere).
 Captions take two lines at the bottom, so keep content above `s.safe.bottom`.
 
-**What does not work for Chinese yet.** The speech check (Whisper base.en)
-only understands English. `voice` reports word coverage from the voice's own
-word timing instead, and `verify` skips the narration check. Listen to
+**Taiwan voice verification.** Edge and macOS Taiwan voices do not use
+Whisper. `voice` reports word coverage from the voice's own word timing
+instead, and `verify` skips their narration check. Other upstream languages
+keep their speech checks. Listen to
 `explainroo say "句子" --voice zh-TW-HsiaoChenNeural` when a word might be
 read wrong.
 
@@ -505,6 +776,9 @@ Set `size` to the place the video goes. `explainroo formats` lists the sizes.
 | `square` (or `1:1`) | 1080 x 1080 | square posts on X, LinkedIn and Facebook |
 
 `9:16`, `4:5` and `WIDTHxHEIGHT` also work.
+
+YouTube and LinkedIn take the `.srt` file as captions when you upload the
+video.
 
 Shorts, TikTok and Reels put their own buttons, the account name and the post
 text on top of the video. With `shorts`, `tiktok`, `reels` and `vertical`,
@@ -534,10 +808,46 @@ elements draw themselves in, frame one is empty. Give the title
 `enter: 'none'` so it is there from the first frame, or pick another cover
 frame in the app.
 
+## One project, several sizes
+
+Use `--size <size>` on `preview`, `still`, `sheet`, `check` and `render`
+to use another size for one run. It leaves `video.json` alone. The narration
+and word times are shared between sizes. Captions set to `"auto"` follow
+the size you choose.
+
+Place things from `s.safe`, `s.cx`, `s.cy`, `s.row`, `s.col` and `s.grid`
+instead of fixed pixel positions. Use `s.portrait` to stack things in tall
+frames. Keep text sizes relative to the frame, for example `s.W * 0.05`.
+`examples/merge-vs-rebase` works in `9:16` and in `youtube`; its scenes.js
+shows one way to do it.
+
+```js
+intro(s) {
+  const cells = s.grid(s.portrait ? 1 : 2, s.portrait ? 2 : 1);
+  ['Question', 'Answer'].forEach((label, i) => {
+    const { x, y, w, h } = cells[i];
+    s.box(label, { x, y, w: w * 0.8, h: h * 0.6,
+      size: s.W * 0.05, at: i ? '#answer' : 0 });
+  });
+}
+```
+
+For every size, run `check --size <size>` and look at
+`sheet --size <size>`. Fix cut-off text and overlaps. Then run
+`render --size <size>` for each size.
+
+`render --size tiktok` writes `out/video-tiktok.mp4` and matching subtitle,
+cover and chapter files. With `--draft`, it writes `draft-tiktok.mp4`.
+Stills go in `out/stills-tiktok/`. A sheet is `out/sheet-tiktok.jpg`, or
+`out/sheet-intro-tiktok.jpg` with `--scene intro`. Ratios use a hyphen in
+file names, for example `video-9-16.mp4`. Without `--size`, names stay the
+same. `render --out` still sets the file name you choose.
+
 ## Pace
 
-`pace` makes the whole video quicker or slower. At 1.3 the voice speaks 30%
-faster. The pauses, the time before and after each scene, the transitions and
+`pace` makes the whole video quicker or slower. At 1.3 the voice speaks about
+30% faster. The voice model does not speed up exactly, so check the length
+`voice` reports. The pauses, the time before and after each scene, the transitions and
 every animation also get 30% shorter. Word and marker cues follow the voice.
 So if you tie pictures to words, the rhythm stays right at any pace. Times in
 seconds are real seconds of the scene, like `s.t` and `s.cue()`. So
@@ -545,7 +855,7 @@ seconds are real seconds of the scene, like `s.t` and `s.cue()`. So
 fixed time like `at: 4` does not move with the pace. That is one more reason
 to use cues. 1 is the normal pace. 1.15 to 1.3 suits social media and viewers
 who know the topic. Above 1.4 the video gets hard to follow. `speed` changes
-only the voice.
+only the voice. Its default is 0.9 for Kokoro and 1 for the other sources.
 
 ## The watermark
 
@@ -554,13 +864,13 @@ Shorts, TikTok and Reels it sits in the top right corner, because the app
 covers the bottom one. The user can turn it off with `"watermark": false` in
 `video.json`, or change it to their own text. If the user asks about it, tell
 them it is their choice, and that keeping it helps more people find this free
-project. Projects made with `--lang zh-TW` start with the watermark off.
+project.
 
 ## Project files and settings
 
 ```
 videos/<name>/
-  video.json    look, size, voice, music, captions, watermark
+  video.json    look, size, language, voice, music, captions, watermark
   script.md     the narration, one "## scene-id" per scene
   scenes.js     one drawing function per scene
   assets/       images: screenshots, logos, generated illustrations
@@ -573,22 +883,26 @@ videos/<name>/
 | Setting | Default | What it does |
 |---|---|---|
 | `title` | from the script | shown in the preview |
-| `theme` | `paper` | `paper`, `clean`, `chalk`, `blueprint`, `midnight` |
+| `theme` | `paper` | a built-in look, or a relative path to a `.json` look file (see Custom looks) |
 | `size` | `16:9` | a platform (`youtube`, `shorts`, `tiktok`, `reels`, `vertical`, `instagram`, `linkedin`, `square`), `16:9`, `9:16`, `1:1`, `4:5` or `WIDTHxHEIGHT` |
 | `fps` | 30 | 24, 25, 30, 50 or 60 |
-| `voice` | `af_heart` | see `explainroo voices`; zh-TW voices in [Traditional Chinese (Taiwan) videos](#traditional-chinese-taiwan-videos) |
-| `speed` | 0.9 (1 for zh-TW voices) | voice speed only, 0.6 to 1.6 |
+| `language` | `en` | narration language: `en`, `es`, `fr`, `it`, `pt-br`, `hi`, `ja`, `zh` or `zh-TW`; existing Taiwan voice configs infer `zh-TW`; see Videos in other languages |
+| `voice` | the language's voice | a Kokoro id, a Taiwan voice id or a provider object for Kokoro, ElevenLabs or a recording; English uses `af_heart`; see Voices |
+| `speed` | 0.9 for Kokoro, 1 otherwise | voice speed only, 0.6 to 1.6; ElevenLabs limits speed times pace to 0.7 through 1.2 |
 | `pitch` | 0 | zh-TW voices only: higher or lower, in Hz, -50 to 50 |
 | `pace` | 1 | speed of the whole video (voice, pauses, animations), 0.7 to 1.6 |
 | `music` | `true` | `true` (the look's style), `warm`, `upbeat`, `calm`, `tech`, `playful`, `{ "style", "volume" }` or `false` |
 | `sfx` | `true` | sound effects: `true`, `"minimal"` or `false` |
 | `captions` | `"auto"` | text of the narration at the bottom; auto turns it on for vertical and square videos |
+| `cover` | `"auto"` | full-size JPEG, without captions, at the end of the first scene, or a still spec: `12.5`, `"intro"`, `"intro@2.4"`, `"intro@end"` |
 | `transition` | `"auto"` | the look's default, or `fade`, `slide`, `wipe`, `zoom`, `brush`, `cut` |
+| `camera` | `"auto"` | `"auto"` films each scene with a camera that follows the narration; `"still"` keeps every frame as written |
+| `motionBlur` | `true` | motion blur on moving frames in the final render |
 | `lead`, `hold`, `end` | 0.35, 0.7, 1.4 | seconds before the voice, after it, and extra at the very end |
-| `sentenceGap`, `paragraphGap` | 0.3, 0.55 | pauses in the narration |
+| `sentenceGap`, `paragraphGap` | 0.3, 0.55 | pauses in generated narration; recordings keep their own pauses |
 | `loudness` | -14 | target loudness in LUFS |
 | `boil` | 0 | redraws per second of hand-drawn lines; 0 keeps them still |
-| `watermark` | `"explainroo.com"` (`false` with `--lang zh-TW`) | small text in a corner, or `false` |
+| `watermark` | `"explainroo.com"` (`false` with `--lang zh-TW` or `--language zh-TW`) | small text in a corner, or `false` |
 | `images` | none | `{ "model": "best" or "cheap", "style": "..." }` |
 | `brand` | none | colors, fonts and logo for `s.ui`, see [Product demos](#product-demos) |
 | `fonts` | none | the video's own font files, see [Product demos](#product-demos) |
@@ -602,24 +916,138 @@ The looks:
 | `chalk` | chalk on a green board | brush | calm |
 | `blueprint` | white drawings on blueprint blue | wipe | tech |
 | `midnight` | dark background with glowing colors | zoom | tech |
+| `editorial` | serif headlines and fine lines on warm paper, like a magazine | fade | calm |
+
+### Custom looks
+
+A look file gives a project its own colors, fonts and texture without
+changing explainroo. Set `"theme": "../brand/acme-look.json"` in `video.json`.
+The path is relative to the video folder, so a file outside it can give
+several videos the same look.
+
+```json
+{
+  "extends": "clean",
+  "name": "acme",
+  "bg": "#fbfaf7",
+  "ink": "#1d1b16",
+  "accent": "orange",
+  "colors": { "orange": "#e8590c" },
+  "background": "dots",
+  "transition": "fade",
+  "music": "calm"
+}
+```
+
+`extends` names the built-in look to start from. Every other key is
+optional and changes only what it lists: `name`, `dark`, `bg`, `ink`, `muted`,
+`surface`, `accent`, `colors`, `fonts`, `background`, `stroke`, `radius`,
+`transition`, `music`, `code`, `terminal` and `caption`. In the nested ones,
+like `colors` or `caption`, list only the values you change. `name` defaults
+to the file name and cannot be a built-in name. Set `"dark": true` when you
+give a light look a dark `bg`, so fills and shadows suit it.
+
+Use colors like `"#e8590c"`. `caption.bg` and `code.highlight` also accept
+`rgba(...)`. `accent` names one of the ten colors: red, orange, yellow,
+green, teal, blue, purple, pink, gray or ink.
+
+`fonts` sets the `display`, `body`, `hand` and `mono` roles. Each takes a
+`family` and a numeric `weight`, for example
+`"body": { "family": "Inter", "weight": 500 }`. Families must be built in
+or listed in `video.json` under `fonts`. The look file does not load fonts.
+
+`background` picks a texture: `paper` (paper grain), `dots` (a dot grid),
+`chalk` (board smudges), `grid` (drafting lines), `glow` (two glows) or
+`plain` (one flat color). Each uses your `bg`. Leave it out to keep the base
+texture. `transition` and `music` set the look's defaults. Settings in
+`video.json` still win. `preview` picks up look edits, and `check` warns
+when `ink` or `muted` has too little contrast against `bg`.
 
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `init <dir>` | creates a project (`--theme`, `--size`, `--pace`, `--voice`, `--title`, `--lang zh-TW`) |
+| `init <dir>` | creates a project (`--theme`, `--size`, `--pace`, `--language`, `--voice`, `--title`, `--lang zh-TW`) |
 | `voice [project]` | makes the narration and the word times, saved per scene so only changed scenes are made again |
-| `preview [project]` | a live preview in the browser that reloads when you save |
-| `still [project] [times]` | PNG pictures at `12.5`, `scene`, `scene@2.4` or `scene@end` |
-| `sheet [project]` | one image with many frames of the video or of one scene (`--scene`, `--every`) |
-| `check [project]` | finds layout, timing and pronunciation problems |
-| `render [project]` | the MP4 (`--draft`, `--from`, `--to`, `--workers`, `--out`) |
-| `verify [project]` | checks the finished file: loudness, black frames, silence, clear voice |
+| `preview [project]` | a live preview in the browser that reloads when you save (`--size`) |
+| `still [project] [times]` | PNG pictures at `12.5`, `scene`, `scene@2.4` or `scene@end` (`--size`, `--transparent` keeps alpha) |
+| `sheet [project]` | one image with many frames of the video or of one scene (`--scene`, `--every`, `--size`) |
+| `check [project]` | finds layout, timing and pronunciation problems (`--size`) |
+| `render [project]` | the video plus subtitle files, chapters and a cover (`--format mp4`, `gif`, `webm` or `mov`, `--transparent`, `--size`, `--draft`, `--from`, `--to`, `--workers`, `--out`) |
+| `verify [project]` | checks the finished MP4, WebM or MOV: loudness, black frames, silence, clear voice (`--file` picks another file) |
+| `export [project]` | writes a web player folder (`--out dir`, `--json`), by default `out/player/` |
+| `capture [project] <url>` | saves screenshots, wording, colors, fonts and logos from a live site (`--mobile`, `--json`) |
 | `image [project] <name> "<prompt>"` | makes an illustration with OpenRouter |
 | `images [project]` | lists the images and what they cost |
-| `voices`, `say "text"` | lists the voices (28 English, 3 Edge zh-TW, and the macOS zh_TW voices installed), or makes a sample (`--voice`, `--speed`, `--pitch`) |
+| `voices`, `say "text"` | lists Kokoro and Taiwan voices with their languages (`--language es`, `ja` or `zh` filters voices), or makes a sample in the chosen voice's language (`--pitch` for zh-TW) |
+| `voices [project] --elevenlabs` | lists the names, ids and labels available to the key (`--json` also works) |
 | `themes`, `formats`, `icons <word>` | lists the looks and the sizes, searches the 1,854 icons |
-| `doctor` | checks the setup (`--fetch` downloads the speech models) |
+| `doctor` | checks Node, ffmpeg, Chrome, the models, and espeak-ng and Python with misaki for other languages (`--fetch` downloads only English models) |
+
+The extra files share the video's name, also with `--out`: `video.srt`,
+`video.vtt`, `video.cover.jpg` and `video.chapters.txt`. A GIF has no sound,
+runs at 15 frames per second and is at most 960 pixels on its long side.
+With `--out`, the file ending must match the format. A render of part of the
+video (`--from`, `--to`) skips the chapters and the cover. A video without
+narration gets no subtitle files.
+
+### Transparent video for editors
+
+To put a diagram or a lower third over camera footage, render with an alpha
+channel: `render --transparent --format mov` for video editors (ProRes 4444)
+or `--format webm` for the web (VP9). The look's background texture is left
+out. Everything the scene paints stays, including `s.bg()` and
+`s.ui.backdrop()`, and cards, captions and the watermark keep their own
+backgrounds. Keep elements readable on footage: use cards or the `bg` option
+of text.
+
+The files are `out/video.mov` or `out/video.webm` (`draft.*` with
+`--draft`), and the cover stays an opaque JPEG. `slide`, `wipe` and `brush`
+transitions become `fade` in a transparent video. Check frames with
+`still --transparent`, which keeps the alpha, and the file with
+`verify --file out/video.mov`, which skips the black-frame check for
+transparent video. Without `--transparent`, WebM and MOV are ordinary opaque
+videos.
+
+## Web player
+
+Use `export` for a video on a docs site or in an iframe. The canvas draws
+at the screen's resolution, so text stays sharp when the player grows.
+The folder has its own engine, fonts, assets, soundtrack, cover and subtitles.
+It needs no explainroo server. The voice is made first if needed.
+
+```bash
+node bin/explainroo.js export videos/my-video
+```
+
+Serve `out/player/` with any static web server. Opening `index.html` as a
+local file does not work. Copy the folder to your site, keeping its files
+together. It works in a subfolder too.
+
+For a 1920 x 1080 video, embed it like this. Change the aspect ratio to
+match your video's width and height.
+
+```html
+<div style="aspect-ratio: 1920 / 1080; width: 100%">
+  <iframe src="/videos/my-video/index.html" title="My video"
+    style="width: 100%; height: 100%; border: 0"
+    allow="autoplay; fullscreen" allowfullscreen></iframe>
+</div>
+```
+
+`index.html?autoplay=1&muted=1` starts muted playback, subject to the
+browser's autoplay rules. `index.html?t=12.5` starts at 12.5 seconds.
+Click the picture to play or pause. Space or K does the same. The arrow
+keys seek five seconds. F opens fullscreen, and M mutes the sound.
+CC shows text captions above the controls. It starts off and remembers
+your choice in the browser. Captions drawn in the canvas stay as they are.
+
+Clips use the browser's video decoder. Use a format the browser can play.
+Their timing can differ a little from the MP4. Math formulas are included
+as typeset paths. Project modules must use relative local imports. Dotfiles,
+JSON and text files from the project are kept out of the export.
+
+The MP4 remains the file to upload to video platforms.
 
 ## Scene API
 
@@ -675,6 +1103,7 @@ there for your own math.
 | Member | Meaning |
 |---|---|
 | `s.W`, `s.H`, `s.cx`, `s.cy` | canvas size and its center (on Shorts, TikTok and Reels the center of `s.safe`) |
+| `s.portrait` | true when the frame is taller than wide |
 | `s.safe` | `{ x, y, w, h, left, top, right, bottom }`: the area for content (a 7% margin, or the part a platform leaves free) |
 | `s.row(n, { width, x })` | n x positions spread over a width |
 | `s.col(n, { height, y })` | n y positions spread over a height, centered in `s.safe` |
@@ -693,6 +1122,10 @@ place the next thing below or beside them.
 | `exit` | `fade`, `pop`, `rise`, `drop`, `slide-left`, `slide-right`, `none` |
 | `dur` | length of the entrance in seconds (shortened by the pace) |
 | `outDur` | length of the exit in seconds (0.45) |
+
+`out` is when the exit starts, so an element is still fading while the next
+one comes in. To swap one label for another in the same place, give the old
+one `exit: 'none'` and the new one the same time as its `at`.
 | `id` | a name for arrows, `annotate` and `s.get` |
 | `color` | a color name (`blue`, `accent`, `ink`, `muted`, ...) or any CSS color |
 | `opacity`, `scale`, `rotate` | extra changes, `rotate` in degrees |
@@ -700,7 +1133,8 @@ place the next thing below or beside them.
 | `sfx` | the sound on entrance, or `false` |
 
 In `paper`, `chalk` and `blueprint`, shapes are drawn line by line and text
-is written out. In `clean` and `midnight`, shapes pop and text rises. Use
+is written out. In `clean` and `midnight`, shapes pop and text rises. In
+`editorial`, shapes fade in and text rises. Use
 `at: -1` for things that were already on screen in the previous scene. They
 are there from the start and make no sound.
 
@@ -722,6 +1156,26 @@ with `write`, `type` (with `cps`), `words` and `sync`. `sync` shows each word
 as the voice says it. Words in `*stars*` get the accent color. `\n` starts a
 new line.
 
+### Math
+
+```js
+s.math('E = mc^2', { y: 420, size: 96, at: 'energy' });
+s.math(String.raw`\int_0^1 x^2\,dx = \tfrac{1}{3}`, { x: 960, y: 700, size: 72, color: 'accent', at: '#integral', id: 'area' });
+```
+
+`s.math(tex, options)` draws a TeX formula. Options: `x`, `y` (the center),
+`size` (72), `color` (ink), `align` (`center` or `left`, where x is the left
+edge), `display` (true for display style), and the common element options.
+It returns a box like text. Its `id` works with arrows and `s.annotate`.
+In `paper`, `chalk` and `blueprint`, the outlines draw first, then fill in.
+Other looks use their text entrance. You can also use `fade`, `pop` or `rise`.
+
+Double each backslash in a regular JS string, for example `'\\frac{1}{2}'`.
+`String.raw` keeps backslashes as written, as in the second example above.
+Only fixed TeX strings work. Always call `s.math`, and use `at` and `out` for
+timing. `check` reports formulas that change with `s.t` or appear only later.
+Formulas are typeset on this computer and cached in `build/math/`.
+
 ### Shapes and arrows
 
 ```js
@@ -740,6 +1194,10 @@ s.path('M0 0 C 200 -150 400 150 600 0', { x: 660, y: 540, at: 3 });
 (hand-drawn looks: `solid`, `hachure`, `cross-hatch`, `zigzag`, `dots`).
 `s.circle({ r, label })` takes the same options.
 
+`s.line(points, options)` and `s.path(d, options)` take `color`, `width`,
+`dashed`, `fill` and `glow`. `s.path` also takes `fillStyle`, and
+`single: true` draws a hand-drawn path with one stroke instead of two.
+
 `s.arrow(from, to, options)` draws an arrow. `from` and `to` are `[x, y]`,
 `{ x, y }` or the `id` of an element drawn earlier. With an `id`, the arrow
 stops at the edge of that element. Options: `bend` (about -1 to 1), `head`
@@ -748,7 +1206,7 @@ stops at the edge of that element. Options: `bend` (about -1 to 1), `head`
 `labelOffset`, `gap`, `dashed`, `width`, `headSize`. `s.connect` does the
 same.
 
-### Icons and images
+### Icons, images and video clips
 
 ```js
 s.icon('database', { x: 1500, y: 540, size: 140, color: 'purple', at: 'database' });
@@ -766,6 +1224,32 @@ Old Lucide names work too. Icon options: `size` (120), `color`, `weight` (2),
 (the image keeps its shape), `fit` (`cover` or `contain`), `radius`, `frame`
 (`none`, `card`, `browser`, `window`, `phone`), `url` (for the browser frame),
 `border`, `shadow: false`, `kenburns: true` for a slow zoom.
+
+`s.clip(src, options)` draws a video from `assets/`. It takes the same
+layout, frame and timing options as `s.image` and returns the same box.
+Use `.mp4`, `.mov`, `.webm` or `.m4v` files.
+
+```js
+s.clip('assets/signup.mp4', { w: 1200, frame: 'browser', url: 'app.example.com', at: 'signup' });
+s.clip('assets/demo.mov', { x: 1400, y: 540, h: 600, from: 12.5, speed: 1.5, at: '#demo', out: 9 });
+```
+
+- `from` (0) is the second in the clip where playback starts.
+- `speed` (1) goes from 0.25 to 4. Playback starts at `at`.
+- `loop` (false) repeats the whole clip. Otherwise it holds the last frame.
+  `check` gives a hint when that freeze lasts more than a second.
+- `volume` (0) goes from 0 to 1. Sound plays only at `speed: 1`.
+  It stops at `out`, the clip's end or the scene's end. Loops repeat the
+  sound too. Music ducks under clip sound as it does under the voice.
+
+Frames are extracted once at the project's fps and saved in `build/clips/`.
+They are at most 1920 pixels wide. Renders, stills and sheets use these
+frames. The preview may show a nearby frame while the right one loads.
+`s.video` still holds the whole video's duration, frames, fps and size.
+Playback starts at `at`, so `at: -1` starts a clip one second into it. To
+show a clip from its first frame when the scene starts, use
+`at: 0, enter: 'none'`. `check` cannot read text inside a clip, so look at
+stills of those moments.
 
 ### Pointing things out
 
@@ -813,11 +1297,30 @@ s.code("const res = await fetch(url);", { lang: 'js', title: 'app.js', at: 0.5 }
 s.terminal(['$ npm install', 'added 42 packages in 3s'], { at: 1 });
 ```
 
-`s.code(source, options)` shows code. Options: `lang` (`js`, `ts`, `py`,
+`s.code(source, options)` shows code. Options: `x` and `y` (the center of
+the window), `lang` (`js`, `ts`, `py`,
 `go`, `rust`, `php`, `sh`, `sql`, `json`, `md`), `size` (32), `w`, `title`
 (or `false`), `lineNumbers: false`, `reveal` (`type`, `lines`, `none`),
 `cps`, `lineDelay`, `highlight` (line numbers) and `highlightAt`. `check`
 reports lines that are wider than the window.
+
+Use steps to show a change, a refactor or a fix:
+
+```js
+s.code([
+  { code: 'const total = items.length;', at: 0.5 },
+  { code: 'const total = items\n  .filter((i) => i.active)\n  .length;', at: 'filter', highlight: [2] },
+  { code: 'const activeCount = items\n  .filter((i) => i.active)\n  .length;', at: '#rename' },
+], { lang: 'js', title: 'stats.js' });
+```
+
+Parts that stay slide to their new place, removed parts fade out and new
+parts fade in. Each later step starts at its own `at`, and the change takes
+`morphDur` seconds (0.8, shortened by `pace`). The element's `at` defaults to
+the first step's. `reveal` applies to the first step only. A step's
+`highlight` replaces the earlier one. The window is as wide as the widest
+step, up to 86% of the frame, unless you set `w`, and its height follows the
+line count. `check` checks the lines of every step.
 
 `s.terminal(lines, options)` shows a terminal. Lines that start with `$ ` are
 typed as commands. Other lines are output. A line can also be `{ cmd, at }`
@@ -826,13 +1329,20 @@ or `{ out, at, color }`. Options: `w`, `size`, `rows`, `title`, `prompt`,
 
 ### Camera, groups and your own drawing
 
-- `s.camera([{ at, x, y, zoom, dur, rotate }])` moves the view. Call it first
-  in the scene function.
+- `s.camera([{ at, x, y, zoom, dur, rotate }])` moves the view by hand
+  instead of the automatic camera (see The camera). Call it first in the
+  scene function. `s.camera([])` keeps the scene still.
+- `s.focus(target, { at, out })` points the automatic camera at an element
+  or a region on a cue, for example one row of a table. `target` is an `id`
+  drawn earlier, `{ x, y, w, h }` (center and size) or `[x, y, w, h]`. It
+  draws nothing. Highlighted code lines and terminal commands get a
+  close-up on their own when they are small in the shot.
 - `s.group({ x, y, scale, rotate, at, out, enter }, () => { ... })` moves a
   set of elements together. Inside the group, positions count from `x`, `y`.
 - `s.draw({ x, y, at, out }, (ctx, life) => { ... })` gives you the canvas 2D
   context, so you can draw anything the other methods cannot. `life.p` is the
-  entrance progress from 0 to 1. `s.ctx` is also available.
+  entrance progress from 0 to 1, and `life.local` the seconds since `at`, for
+  motion that keeps going. `s.ctx` is also available.
 - `s.burst({ x, y, at, count, colors })` fires confetti.
 - `s.bg(color)` paints over the background.
 - `s.rand(i)`, `s.noise(x)` and `s.wiggle(amount, speed)` give random values
@@ -868,6 +1378,8 @@ font roles are `display`, `body`, `hand` and `mono`.
 - Calling an element only sometimes, like `if (s.t > 3) s.box(...)`. Always
   call it, and use `at` and `out` for the timing. The sound effects and the
   checks depend on this.
+- Changing the TeX in `s.math` over time. Use fixed strings for each formula,
+  and give each one its own `at` and `out`.
 - An arrow or annotation that points to an `id` drawn later in the function.
 - `s.camera()` after other elements. It has to come first.
 - An `at` later than the end of the scene. Make the scene longer with
@@ -900,13 +1412,24 @@ font roles are `display`, `body`, `hand` and `mono`.
   only, not its label, so an arrow that leaves downward crosses the label.
 - Colored text in `paper` and `clean`. Green, orange and red are light enough
   for shapes but often too light for text. `check` warns about low contrast.
-  Use `ink`, `accent` or a darker hex color for text.
+  It suggests a readable color and shows its contrast ratio.
+- Long video clips fill `build/clips/` with frames. Trim footage to the part
+  you show before you add it. Deleting `build/clips/` is safe.
+- Screen recordings often have a variable frame rate. explainroo converts
+  them to the project's fps, so a frame can repeat or drop. Record at a fixed
+  frame rate when the motion matters.
+- Exact geometry in `paper`, `chalk` and `blueprint`. Their outlines are
+  hand drawn, so a circle's edge wanders a little from its radius. When a
+  line has to meet an outline exactly, like a radius that ends on the
+  circle, draw both with `s.draw`.
+- A render that stops with a closed browser or `EPIPE` on a busy computer.
+  Run it again with fewer pages, for example `render --workers 2`.
 
-`check` looks at text only. It finds text off the frame, too close to the
-edge (3.5%), too small, with low contrast (against the page, or against the
-text's own `bg`), on top of other text, or under the captions. It does not
-see shapes, arrows and icons, or drawings made with `s.draw`. Look at the
-stills for those.
+`check` looks at text and math formulas. It finds text off the frame, too
+close to the edge (3.5%), too small, with low contrast (against the page, or
+against the text's own `bg`), on top of other text, or under the captions.
+It does not see shapes, arrows and icons, or drawings made with `s.draw`.
+Look at the stills for those.
 
 ## Working on explainroo itself
 

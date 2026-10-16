@@ -38,7 +38,7 @@ const SAMPLE_RATE = 24000;
 const HAN = /\p{Script=Han}/u;
 
 export function isZhVoice(voice) {
-  return voice in ZH_VOICES || voice.startsWith('say:');
+  return typeof voice === 'string' && (Object.hasOwn(ZH_VOICES, voice) || voice.startsWith('say:'));
 }
 
 // The Python that runs scripts/edge_tts.py: $EXPLAINROO_PYTHON, a python3

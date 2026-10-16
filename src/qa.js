@@ -1,28 +1,30 @@
 // Quality tools for the agent: layout checks, stills, contact sheets and a
-// verification pass over the rendered MP4.
+// verification pass over the rendered video.
 import fs from 'node:fs';
 import path from 'node:path';
 import { prepare, withEngine } from './pipeline.js';
 import { probe, loudness, ffmpeg } from './ffmpeg.js';
 import { transcribeWords } from './models.js';
 import { readWav } from './wav.js';
-import { alignWords } from './align.js';
+import { alignWords, readAlike } from './align.js';
+import { buildChapters, chapterHints } from './chapters.js';
+import { outputPath } from './project.js';
 import { isZhVoice } from './zhvoice.js';
 import { zhIssues } from './zhlint.js';
 
 export async function check(project, { log = () => {}, step = 0.25, viewWidth = null } = {}) {
   if (viewWidth !== null && (!Number.isFinite(viewWidth) || viewWidth <= 0)) throw new Error("--view-width must be a positive number");
   const { voices, timeline } = await prepare(project, { log });
-  const issues = [];
+  const issues = chapterHints(buildChapters(timeline, project.script.title || project.config.title));
   for (const sc of project.script.scenes) {
     const v = voices[sc.id];
-    const suspicious = v ? v.unmatched.filter((w) => w.replace(/[^\p{L}\p{N}]/gu, '').length > 3) : [];
+    const suspicious = v ? v.unmatched.filter((w) => w.replace(/[^\p{L}\p{M}\p{N}]/gu, '').length > 3) : [];
     if (v && v.duration && (v.matchRate < 0.9 || suspicious.length)) {
-      issues.push({ level: 'warn', scene: sc.id, t: null, message: `the voice check could not confirm ${suspicious.length ? suspicious.slice(0, 8).map((w) => `"${w}"`).join(', ') : `${Math.round((1 - v.matchRate) * 100)}% of the words`}. It heard: "${v.transcript.slice(0, 200)}". If a word is mispronounced, write it as {shown|spoken} in script.md.` });
+      issues.push({ level: 'warn', scene: sc.id, t: null, message: `the voice check could not confirm ${suspicious.length ? suspicious.slice(0, 8).map((w) => `"${w}"`).join(', ') : `${Math.round((1 - v.matchRate) * 100)}% of the words`}. It heard: "${v.transcript.slice(0, 200)}". ${project.config.voice.provider === 'recording' ? 'The recording does not match script.md here. Make script.md say what was actually said.' : 'If a word is mispronounced, write it as {shown|spoken} in script.md.'}` });
     }
     if (v && v.duration > 40) issues.push({ level: 'hint', scene: sc.id, t: null, message: `the narration runs ${v.duration.toFixed(0)}s; long scenes are easier to follow when split` });
   }
-  if (isZhVoice(project.config.voice)) {
+  if (typeof project.config.voice === 'string' && isZhVoice(project.config.voice)) {
     issues.push(...zhIssues(project, fs.readFileSync(project.paths.scenes, 'utf8')));
     if (project.config.voice.startsWith('say:')) issues.push({ level: 'hint', scene: null, t: null, message: `macOS voices give no word times, so word cues are estimated from character counts; prefer [#markers], or use zh-TW-HsiaoChenNeural for exact timing` });
   }
@@ -40,7 +42,7 @@ export function resolveTimes(timeline, specs) {
   const endOf = (sc) => sc.start + Math.max(0, sc.dur - 0.3);
   if (!specs.length) return timeline.scenes.map((sc) => ({ T: endOf(sc), label: `${sc.id}@end` }));
   return specs.map((spec) => {
-    if (/^\d+(\.\d+)?$/.test(spec)) {
+    if (typeof spec === 'number' || /^\d+(\.\d+)?$/.test(spec)) {
       const T = Math.min(Number(spec), timeline.duration - 1 / timeline.fps);
       return { T, label: `t${T.toFixed(2)}` };
     }
@@ -56,10 +58,11 @@ export function resolveTimes(timeline, specs) {
   });
 }
 
-export async function stills(project, specs, { log = () => {}, scale = 1 } = {}) {
+export async function stills(project, specs, { log = () => {}, scale = 1, transparent = false } = {}) {
   const { timeline } = await prepare(project, { log });
-  const list = resolveTimes(timeline, specs).map((x) => ({ ...x, path: `out/stills/${x.label.replace(/[^\w@.-]/g, '_')}.png` }));
-  await withEngine(project, timeline, { scale, log }, (page) => page.evaluate((l) => window.explainroo.stills(l), list));
+  const dir = path.relative(project.dir, outputPath(project, 'stills')).split(path.sep).join('/');
+  const list = resolveTimes(timeline, specs).map((x) => ({ ...x, path: `${dir}/${x.label.replace(/[^\w@.-]/g, '_')}.png` }));
+  await withEngine(project, timeline, { scale, transparent, log }, (page) => page.evaluate((l) => window.explainroo.stills(l), list));
   return list.map((x) => ({ time: Math.round(x.T * 100) / 100, label: x.label, file: path.join(project.dir, x.path) }));
 }
 
@@ -67,7 +70,7 @@ export async function sheet(project, { scene = null, every = null, cols = null, 
   const { timeline } = await prepare(project, { log });
   let times = [];
   let labels = [];
-  let file = 'out/sheet.jpg';
+  const file = path.relative(project.dir, outputPath(project, scene ? `sheet-${scene}` : 'sheet', '.jpg')).split(path.sep).join('/');
   if (scene) {
     const sc = timeline.scenes.find((s) => s.id === scene);
     if (!sc) throw new Error(`no scene "${scene}". Scenes: ${timeline.scenes.map((s) => s.id).join(', ')}`);
@@ -78,7 +81,6 @@ export async function sheet(project, { scene = null, every = null, cols = null, 
     }
     times.push(sc.start + sc.dur - 0.05);
     labels.push(`${sc.id} end`);
-    file = `out/sheet-${scene}.jpg`;
   } else {
     const step = every ?? Math.max(0.5, Math.min(3, timeline.duration / 30));
     for (let T = 0; T < timeline.duration; T += step) {
@@ -95,6 +97,7 @@ export async function sheet(project, { scene = null, every = null, cols = null, 
 
 export async function verify(project, { file = null, log = () => {} } = {}) {
   const video = path.resolve(file || path.join(project.paths.out, 'video.mp4'));
+  if (path.extname(video).toLowerCase() === '.gif') throw new Error('verify checks MP4, WebM and MOV files. Pass a video with --file.');
   if (!fs.existsSync(video)) throw new Error(`${video} does not exist. Run "explainroo render" first.`);
   const issues = [];
   const info = await probe(video);
@@ -109,8 +112,13 @@ export async function verify(project, { file = null, log = () => {} } = {}) {
   }
   if (loud && loud.truePeak !== null && loud.truePeak > -0.5) issues.push({ level: 'warn', message: `true peak ${loud.truePeak} dBFS is close to clipping` });
 
-  const { stderr: bd } = await ffmpeg(['-nostats', '-i', video, '-vf', 'blackdetect=d=0.4:pix_th=0.08', '-an', '-f', 'null', '-']);
-  const blacks = [...bd.matchAll(/black_start:([\d.]+) black_end:([\d.]+)/g)].map((m) => [Number(m[1]), Number(m[2])]);
+  const alpha = v && (String(v.tags?.alpha_mode ?? v.tags?.ALPHA_MODE) === '1' || /^(yuva|rgba|bgra|gbrap|argb|abgr)/.test(v.pix_fmt || ''));
+  let blacks = [];
+  if (alpha) issues.push({ level: 'hint', message: 'black-frame detection is skipped because the video has alpha' });
+  else if (v) {
+    const { stderr: bd } = await ffmpeg(['-nostats', '-i', video, '-vf', 'blackdetect=d=0.4:pix_th=0.08', '-an', '-f', 'null', '-']);
+    blacks = [...bd.matchAll(/black_start:([\d.]+) black_end:([\d.]+)/g)].map((m) => [Number(m[1]), Number(m[2])]);
+  }
   for (const [s, e] of blacks) issues.push({ level: 'warn', message: `black frames from ${s.toFixed(2)}s to ${e.toFixed(2)}s` });
 
   let silences = [];
@@ -127,16 +135,17 @@ export async function verify(project, { file = null, log = () => {} } = {}) {
   // chunk of a long file ("(bell dings)"), and per scene the report can say
   // where the voice is hard to follow.
   let speech = null;
-  // The speech check model (Whisper base.en) only understands English.
-  if (a && isZhVoice(project.config.voice)) issues.push({ level: 'hint', message: 'the narration check is English only and was skipped for this Chinese voice; listen to the video once' });
-  if (a && !isZhVoice(project.config.voice)) {
+  const taiwanVoice = typeof project.config.voice === 'string' && isZhVoice(project.config.voice);
+  const alignLanguage = project.config.language === 'zh-TW' ? 'zh' : project.config.language;
+  if (a && taiwanVoice) issues.push({ level: 'hint', message: 'the final-mix speech check is skipped for this Taiwan Mandarin voice; listen to the video once' });
+  if (a && !taiwanVoice) {
     const wav = path.join(project.paths.build, 'verify-16k.wav');
     await ffmpeg(['-loglevel', 'error', '-i', video, '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', wav]);
     const { samples } = readWav(wav);
     log('checking that the narration is understandable in the final mix');
     const tlFile = path.join(project.paths.build, 'timeline.json');
     const timeline = fs.existsSync(tlFile) ? JSON.parse(fs.readFileSync(tlFile, 'utf8')) : null;
-    const spokenWords = (sc) => sc.units.filter((u) => u.type === 'word').map((u) => ({ spoken: u.spoken }));
+    const spokenWords = (sc) => sc.units.filter((u) => u.type === 'word').map((u) => ({ spoken: u.spoken, display: u.display }));
     const byId = new Map(project.script.scenes.map((sc) => [sc.id, sc]));
     const sameScenes = timeline && timeline.scenes.length === project.script.scenes.length && timeline.scenes.every((t) => byId.has(t.id)) && Math.abs(timeline.duration - duration) < 1;
     if (sameScenes) {
@@ -149,9 +158,10 @@ export async function verify(project, { file = null, log = () => {} } = {}) {
         if (!words.length) continue;
         const from = Math.max(0, Math.floor(t.start * 16000));
         const to = Math.min(samples.length, Math.ceil((t.start + t.dur) * 16000));
-        const heard = await transcribeWords(samples.subarray(from, to), { log });
+        const heard = await transcribeWords(samples.subarray(from, to), { log, language: project.config.language });
         texts.push(heard.text);
-        const rate = alignWords(words, heard.words, t.dur).matchRate;
+        const alike = await readAlike(words, heard.words, alignLanguage);
+        const rate = alignWords(alike.words, alike.heard, t.dur, alignLanguage).matchRate;
         scenes.push({ id: t.id, matchRate: Math.round(rate * 1000) / 1000 });
         total += words.length;
         matched += rate * words.length;
@@ -160,9 +170,10 @@ export async function verify(project, { file = null, log = () => {} } = {}) {
       const rate = total ? matched / total : 1;
       speech = { matchRate: Math.round(rate * 1000) / 1000, transcript: texts.join(' '), scenes };
     } else {
-      const heard = await transcribeWords(samples, { log });
+      const heard = await transcribeWords(samples, { log, language: project.config.language });
       const script = project.script.scenes.flatMap(spokenWords);
-      speech = { matchRate: Math.round(alignWords(script, heard.words, duration).matchRate * 1000) / 1000, transcript: heard.text };
+      const alike = await readAlike(script, heard.words, alignLanguage);
+      speech = { matchRate: Math.round(alignWords(alike.words, alike.heard, duration, alignLanguage).matchRate * 1000) / 1000, transcript: heard.text };
     }
     if (speech.matchRate < 0.85) issues.push({ level: 'warn', message: `only ${Math.round(speech.matchRate * 100)}% of the script was understood in the final mix; lower music.volume or check pronunciation` });
     fs.rmSync(wav, { force: true });

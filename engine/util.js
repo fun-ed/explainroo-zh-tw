@@ -16,6 +16,8 @@ export const ease = {
   outElastic: (p) => (p === 0 || p === 1 ? p : Math.pow(2, -10 * p) * Math.sin((p * 10 - 0.75) * ((2 * Math.PI) / 3)) + 1),
   outQuart: (p) => 1 - Math.pow(1 - p, 4),
   inOutSine: (p) => -(Math.cos(Math.PI * p) - 1) / 2,
+  // A lightly damped spring: quick, about 4% past the end, then settled.
+  spring: (p) => (p >= 1 ? 1 : 1 - Math.exp(-7.2 * p) * Math.cos(7.2 * p)),
 };
 
 export function easeFn(name) {
@@ -118,6 +120,58 @@ export function contrast(c1, c2) {
   return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
 }
 
+function hsl(c) {
+  const { r, g, b } = parseColor(c);
+  const [R, G, B] = [r, g, b].map(v => v / 255);
+  const max = Math.max(R, G, B), min = Math.min(R, G, B);
+  const d = max - min, l = (max + min) / 2;
+  const h = !d ? 0 : max === R ? ((G - B) / d + 6) % 6 : max === G ? (B - R) / d + 2 : (R - G) / d + 4;
+  return { h: h * 60, s: d ? d / (1 - Math.abs(2 * l - 1)) : 0, l };
+}
+
+function hslHex({ h, s, l }) {
+  const a = s * Math.min(l, 1 - l);
+  const channel = n => {
+    const k = (n + h / 30) % 12;
+    const v = l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+    return Math.round(clamp(v) * 255).toString(16).padStart(2, '0');
+  };
+  return '#' + channel(0) + channel(8) + channel(4);
+}
+
+export function suggestColor(fg, bg, size = 0, colors = {}) {
+  if (!parseColor(fg) || !parseColor(bg)) return null;
+  const min = size >= 48 ? 3 : 4.5;
+  const result = color => ({ color, ratio: contrast(colors[color] || color, bg) });
+  if (contrast(fg, bg) >= min) return { color: fg, ratio: contrast(fg, bg) };
+  const source = hsl(fg);
+  const named = Object.entries(colors).filter(([, c]) => parseColor(c) && contrast(c, bg) >= min)
+    .map(([name, c]) => {
+      const p = hsl(c);
+      const diff = Math.abs(source.h - p.h);
+      const hue = Math.min(diff, 360 - diff);
+      // Hue is undefined for grays, so match them only with other grays.
+      const gray = source.s <= 0.1 && p.s <= 0.1;
+      const close = gray || source.s > 0.1 && p.s > 0.1 && hue <= 15;
+      return { name, close, distance: (gray ? 0 : hue / 180) ** 2 + (source.s - p.s) ** 2 + (source.l - p.l) ** 2 };
+    }).filter(p => p.close).sort((a, b) => a.distance - b.distance);
+  if (named.length) return result(named[0].name);
+  const candidates = [];
+  for (const end of [0, 1]) {
+    if (contrast(hslHex({ ...source, l: end }), bg) < min) continue;
+    let fail = source.l, pass = end;
+    // Check rounded hex values so the suggested color itself meets the target.
+    for (let i = 0; i < 24; i++) {
+      const l = (fail + pass) / 2;
+      if (contrast(hslHex({ ...source, l }), bg) >= min) pass = l;
+      else fail = l;
+    }
+    candidates.push({ l: pass, color: hslHex({ ...source, l: pass }) });
+  }
+  candidates.sort((a, b) => Math.abs(a.l - source.l) - Math.abs(b.l - source.l));
+  return result(candidates[0].color);
+}
+
 export function levenshtein(a, b) {
   const m = a.length;
   const n = b.length;
@@ -145,7 +199,7 @@ export function normWord(w) {
     .normalize('NFKD')
     .replace(/[̀-ͯ]/g, '')
     .replace(/['’]/g, '')
-    .replace(/[^a-z0-9%$€£+#@.\p{Script=Han}]/gu, '')
+    .replace(/[^\p{L}\p{M}\p{N}%$€£+#@.]/gu, '')
     .replace(/^\.+|\.+$/g, '');
 }
 

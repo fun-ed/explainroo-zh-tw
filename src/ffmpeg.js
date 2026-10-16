@@ -36,13 +36,17 @@ export function ffmpeg(args, opts) {
   return run(ffmpegPath(), ['-hide_banner', '-y', ...args], opts);
 }
 
-// A long-running encoder fed with JPEG frames on stdin.
-export function frameEncoder({ fps, out, draft }) {
+// A long-running encoder fed with JPEG or PNG frames on stdin.
+export function frameEncoder({ fps, out, draft, format = 'mp4', transparent = false }) {
+  const codec = format === 'webm'
+    ? ['-c:v', 'libvpx-vp9', '-crf', draft ? '32' : '24', '-b:v', '0', '-deadline', 'good', '-cpu-used', draft ? '4' : '2', '-auto-alt-ref', '0', '-pix_fmt', transparent ? 'yuva420p' : 'yuv420p', '-r', String(fps), '-g', String(fps * 2)]
+    : format === 'mov'
+      ? ['-c:v', 'prores_ks', '-profile:v', '4', '-pix_fmt', transparent ? 'yuva444p10le' : 'yuv444p10le', '-r', String(fps)]
+      : ['-c:v', 'libx264', '-preset', draft ? 'veryfast' : 'medium', '-crf', draft ? '24' : '17', '-tune', 'animation', '-pix_fmt', 'yuv420p', '-r', String(fps), '-g', String(fps * 2)];
   const args = [
     '-hide_banner', '-y', '-loglevel', 'error',
-    '-f', 'image2pipe', '-framerate', String(fps), '-c:v', 'mjpeg', '-i', '-',
-    '-c:v', 'libx264', '-preset', draft ? 'veryfast' : 'medium', '-crf', draft ? '24' : '17',
-    '-tune', 'animation', '-pix_fmt', 'yuv420p', '-r', String(fps), '-g', String(fps * 2),
+    '-f', 'image2pipe', '-framerate', String(fps), '-c:v', transparent ? 'png' : 'mjpeg', '-i', '-',
+    ...codec,
     out,
   ];
   const p = spawn(ffmpegPath(), args, { stdio: ['pipe', 'ignore', 'pipe'] });
@@ -69,13 +73,18 @@ export function frameEncoder({ fps, out, draft }) {
 }
 
 // Two-pass loudness normalization to `target` LUFS, peak-limited.
-export async function normalizeLoudness(input, output, target = -14) {
+export async function normalizeLoudness(input, output, target = -14, sampleRate = 48000) {
   const base = `I=${target}:TP=-1.5:LRA=11`;
   const pass1 = await ffmpeg(['-i', input, '-af', `loudnorm=${base}:print_format=json`, '-f', 'null', '-']);
   const json = pass1.stderr.slice(pass1.stderr.lastIndexOf('{'), pass1.stderr.lastIndexOf('}') + 1);
   const m = JSON.parse(json);
+  // Silence and very short clips have no measurable integrated loudness.
+  if (!Number.isFinite(Number(m.input_i))) {
+    await ffmpeg(['-i', input, '-ar', String(sampleRate), '-c:a', 'pcm_s16le', output]);
+    return { inputI: Number(m.input_i), inputTP: Number(m.input_tp) };
+  }
   const measured = `measured_I=${m.input_i}:measured_TP=${m.input_tp}:measured_LRA=${m.input_lra}:measured_thresh=${m.input_thresh}:offset=${m.target_offset}`;
-  await ffmpeg(['-i', input, '-af', `loudnorm=${base}:${measured}:linear=true:print_format=summary`, '-ar', '48000', '-c:a', 'pcm_s16le', output]);
+  await ffmpeg(['-i', input, '-af', `loudnorm=${base}:${measured}:linear=true:print_format=summary`, '-ar', String(sampleRate), '-c:a', 'pcm_s16le', output]);
   return { inputI: Number(m.input_i), inputTP: Number(m.input_tp) };
 }
 

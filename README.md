@@ -22,6 +22,10 @@
 這是 [explainroo](https://github.com/vincentsch/explainroo) 的台灣版 fork。
 agent 會寫好旁白腳本（`script.md`）和畫面（`scenes.js`），explainroo 負責配音、對時、畫圖、配樂，最後輸出 MP4。
 
+目前同步至上游 **0.4.0**。保留自動鏡頭、`editorial` 風格、多語語音與字幕匯出等新功能。
+台灣版可用 `--language zh-TW`，原本的 `--lang zh-TW` 仍可使用。
+`zh` 是上游的 Kokoro 中文語音，`zh-TW` 才是本 fork 的台灣語音。
+
 ### 1. 安裝
 
 需要先裝好的東西：
@@ -115,7 +119,7 @@ node bin/explainroo.js render videos/demo   # 輸出 videos/demo/out/video.mp4
 
 ### 6. 已知限制
 
-- 自動發音檢查只懂英文。中文影片 render 完要自己聽一遍。
+- 台灣 Edge 和 macOS 語音不做 Whisper 發音檢查。影片 render 完要自己聽一遍。
 - 簡體字和中國用語的檢查只用常見字表，不是完整的轉換器。
 - 中文字型依賴系統：macOS 用 PingFang TC，Linux 請裝 Noto Sans TC（`fonts-noto-cjk`）。
 - 台灣語音沒有情緒風格（例如開心、嚴肅），語氣只能靠用詞、標點、`pitch` 和速度來調。
@@ -132,6 +136,10 @@ A Taiwan fork of [explainroo](https://github.com/vincentsch/explainroo). Your co
 `script.md` (narration) and `scenes.js` (drawings). explainroo adds the voice, timing, drawings and
 music, and renders an MP4. This fork adds Taiwan Mandarin narration, per-character timing,
 Traditional Chinese or bilingual captions, and a Taiwan wording check.
+
+Synced with upstream **0.4.0**, including automatic camera direction, the `editorial` look,
+multilingual voices and subtitle export. Use `--language zh-TW` or the existing
+`--lang zh-TW` for Taiwan voices. Upstream `zh` selects Kokoro Mandarin instead.
 
 ### Install
 
@@ -171,7 +179,7 @@ node bin/explainroo.js render videos/demo-zh                            # -> out
   `"voice": "say:Meijia"` stays offline on macOS, with estimated word timing.
 - Bilingual captions: write `[en: ...]` after each Chinese sentence.
 - Voice tuning for zh-TW: `"pitch": -20` (Hz), `speed`, `pace`; punctuation sets pauses (`，` short, `……` 0.5 s). `voices` also lists the macOS zh_TW voices installed, including Premium ones.
-- Looks: `paper`, `clean`, `chalk`, `blueprint`, `midnight`. Sizes: `youtube`, `shorts`,
+- Looks: `paper`, `clean`, `chalk`, `blueprint`, `midnight`, `editorial`. Sizes: `youtube`, `shorts`,
   `tiktok`, `reels`, `instagram`, `square`. Speed: `"pace": 1.2` in `video.json`.
 - The watermark is on by default for English projects; `"watermark": false` turns it off.
 

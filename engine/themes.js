@@ -1,9 +1,11 @@
-// The five looks. A theme decides colors, fonts, how strokes are drawn, how
+// The six looks. A theme decides colors, fonts, how strokes are drawn, how
 // elements enter, the default transition, the sound palette and the music.
-import { mulberry32, mixColor, withAlpha } from './util.js';
+import { mulberry32, mixColor, withAlpha, parseColor, rgba, clamp } from './util.js';
 
 const PAPER = {
   name: 'paper',
+  background: 'paper',
+  music: 'warm',
   dark: false,
   bg: '#f7f3ea',
   ink: '#26221d',
@@ -34,6 +36,8 @@ const PAPER = {
 
 const CLEAN = {
   name: 'clean',
+  background: 'dots',
+  music: 'upbeat',
   dark: false,
   bg: '#f4f6fb',
   ink: '#111827',
@@ -45,7 +49,7 @@ const CLEAN = {
     blue: '#3b6cf6', purple: '#7c5cff', pink: '#ec4899', gray: '#98a2b3', ink: '#111827',
   },
   fonts: {
-    display: { family: 'Plus Jakarta Sans', weight: 800 },
+    display: { family: 'Plus Jakarta Sans', weight: 800, tracking: -0.025 },
     body: { family: 'Inter', weight: 400 },
     hand: { family: 'Kalam', weight: 400 },
     mono: { family: 'JetBrains Mono', weight: 400 },
@@ -64,6 +68,8 @@ const CLEAN = {
 
 const CHALK = {
   name: 'chalk',
+  background: 'chalk',
+  music: 'calm',
   dark: true,
   bg: '#233d31',
   ink: '#f2f0e6',
@@ -94,6 +100,8 @@ const CHALK = {
 
 const BLUEPRINT = {
   name: 'blueprint',
+  background: 'grid',
+  music: 'tech',
   dark: true,
   bg: '#12508f',
   ink: '#f1f7ff',
@@ -124,6 +132,8 @@ const BLUEPRINT = {
 
 const MIDNIGHT = {
   name: 'midnight',
+  background: 'glow',
+  music: 'tech',
   dark: true,
   bg: '#0b1020',
   ink: '#e8eef8',
@@ -135,7 +145,7 @@ const MIDNIGHT = {
     blue: '#60a5fa', purple: '#a78bfa', pink: '#f472b6', gray: '#64748b', ink: '#e8eef8',
   },
   fonts: {
-    display: { family: 'Space Grotesk', weight: 700 },
+    display: { family: 'Space Grotesk', weight: 700, tracking: -0.02 },
     body: { family: 'Inter', weight: 400 },
     hand: { family: 'Kalam', weight: 400 },
     mono: { family: 'JetBrains Mono', weight: 400 },
@@ -152,12 +162,48 @@ const MIDNIGHT = {
   caption: { bg: 'rgba(7,11,22,0.82)', fg: '#e8eef8', active: '#22d3ee' },
 };
 
-export const THEMES = { paper: PAPER, clean: CLEAN, chalk: CHALK, blueprint: BLUEPRINT, midnight: MIDNIGHT };
+const EDITORIAL = {
+  name: 'editorial',
+  background: 'paper',
+  music: 'calm',
+  dark: false,
+  bg: '#f5f1ea',
+  ink: '#1c1a17',
+  muted: '#76706a',
+  surface: '#fffdf9',
+  accent: 'red',
+  colors: {
+    red: '#c2462b', orange: '#c7782a', yellow: '#b8932a', green: '#3d7a57', teal: '#2c7a74',
+    blue: '#2f5b88', purple: '#6a4e8c', pink: '#b04870', gray: '#8a847b', ink: '#1c1a17',
+  },
+  fonts: {
+    display: { family: 'Instrument Serif', weight: 400, tracking: -0.01 },
+    body: { family: 'Inter', weight: 400 },
+    hand: { family: 'Instrument Serif', weight: 400 },
+    mono: { family: 'JetBrains Mono', weight: 400 },
+  },
+  stroke: { rough: false, width: 2.5 },
+  radius: 8,
+  tintStrength: 0.1,
+  shadow: { color: 'rgba(40,32,20,0.10)', blur: 24, y: 8 },
+  enter: { shape: 'fade', text: 'rise', title: 'rise', icon: 'fade', image: 'fade', list: 'rise', code: 'fade', chart: 'grow', number: 'rise', arrow: 'draw', line: 'draw' },
+  transition: 'fade',
+  sfx: { shape: 'pop', arrow: 'whoosh', line: 'whoosh', icon: 'pop', image: 'pop', text: null, title: null, list: 'blip', number: 'tick', annotate: 'whoosh', chart: 'whoosh', code: 'type', terminal: 'type', burst: 'sparkle', transition: 'swipe' },
+  code: { bg: '#1c1a17', fg: '#f3eee6', comment: '#8a847b', keyword: '#e0896f', string: '#a9c49a', number: '#e3b866', fn: '#9cc3dd', punct: '#bdb6aa', lineNo: '#6b655d', highlight: 'rgba(227,184,102,0.16)', border: '#1c1a17' },
+  terminal: { bg: '#1c1a17', fg: '#f3eee6', prompt: '#e3b866', muted: '#a49d92', bar: '#2c2925' },
+  caption: { bg: 'rgba(28,26,23,0.86)', fg: '#fffdf9', active: '#e3b866' },
+};
 
-export function getTheme(name) {
-  const t = THEMES[name];
+export const THEMES = { paper: PAPER, clean: CLEAN, chalk: CHALK, blueprint: BLUEPRINT, midnight: MIDNIGHT, editorial: EDITORIAL };
+
+export function getTheme(name, look = null) {
+  const t = THEMES[look ? look.extends : name];
   if (!t) throw new Error(`unknown theme "${name}". Themes: ${Object.keys(THEMES).join(', ')}`);
-  return t;
+  if (!look) return t;
+  const { extends: base, ...overrides } = look;
+  const merge = (a, b) => Object.fromEntries(Object.entries({ ...a, ...b }).map(([k, v]) =>
+    [k, v && typeof v === 'object' && !Array.isArray(v) ? merge(a?.[k], v) : v]));
+  return merge(t, overrides);
 }
 
 // Resolves a color name ("blue", "accent", "ink", "muted") or passes a CSS color through.
@@ -183,12 +229,13 @@ export function tintOf(theme, c) {
 
 export const CJK_FONTS = '"PingFang TC", "Noto Sans TC", "Noto Sans CJK TC", "Microsoft JhengHei"';
 
-export function fontString(theme, role = 'body', size = 48, weight) {
+export function fontString(theme, role = 'body', size = 48, weight, language) {
   const f = theme.fonts[role] || theme.fonts.body;
   const w = weight ?? f.weight;
-  // Chinese text falls back to a Traditional Chinese system font.
-  const fallback = `${CJK_FONTS}, ${role === 'mono' ? 'monospace' : 'sans-serif'}`;
-  return `${w} ${Math.round(size * 100) / 100}px "${f.family}", ${fallback}`;
+  const fallback = role === 'mono' ? 'monospace' : 'sans-serif';
+  // Taiwan gets Traditional fonts first; Japanese and Simplified Chinese keep upstream priority.
+  const cjkFallback = language === 'zh-TW' ? `${CJK_FONTS}, "Noto Sans JP", "Noto Sans SC"` : `"Noto Sans JP", "Noto Sans SC", ${CJK_FONTS}`;
+  return `${w} ${Math.round(size * 100) / 100}px "${f.family}", "Noto Sans Devanagari", ${cjkFallback}, ${fallback}`;
 }
 
 // Background textures are rendered once and reused on every frame.
@@ -198,6 +245,15 @@ export function makeBackground(theme, W, H, seed = 1) {
   c.height = H;
   const g = c.getContext('2d');
   const rand = mulberry32(seed * 7919 + theme.name.length);
+  const base = Object.values(THEMES).find((t) => t.background === theme.background);
+  const bg = parseColor(theme.bg);
+  const original = parseColor(base?.bg || theme.bg);
+  // Shift the original tones with the background, keeping built-in pixels unchanged.
+  const tone = (color) => {
+    if (theme.bg === base?.bg) return color;
+    const p = parseColor(color);
+    return rgba({ r: clamp(p.r + bg.r - original.r, 0, 255), g: clamp(p.g + bg.g - original.g, 0, 255), b: clamp(p.b + bg.b - original.b, 0, 255), a: p.a });
+  };
   const noise = (count, alphaMax, color, sizeMax = 1.6) => {
     for (let i = 0; i < count; i++) {
       g.fillStyle = withAlpha(color, rand() * alphaMax);
@@ -205,15 +261,15 @@ export function makeBackground(theme, W, H, seed = 1) {
       g.fillRect(rand() * W, rand() * H, s, s);
     }
   };
-  switch (theme.name) {
+  switch (theme.background) {
     case 'paper': {
       g.fillStyle = theme.bg;
       g.fillRect(0, 0, W, H);
-      noise(Math.round(W * H * 0.05), 0.07, '#6b5a3d');
-      noise(Math.round(W * H * 0.02), 0.08, '#ffffff', 2);
+      noise(Math.round(W * H * 0.05), 0.07, tone('#6b5a3d'));
+      noise(Math.round(W * H * 0.02), 0.08, tone('#ffffff'), 2);
       g.lineWidth = 0.7;
       for (let i = 0; i < 90; i++) {
-        g.strokeStyle = withAlpha('#8a7654', 0.05 + rand() * 0.05);
+        g.strokeStyle = withAlpha(tone('#8a7654'), 0.05 + rand() * 0.05);
         const x = rand() * W;
         const y = rand() * H;
         const a = rand() * Math.PI;
@@ -224,27 +280,27 @@ export function makeBackground(theme, W, H, seed = 1) {
         g.stroke();
       }
       const v = g.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.35, W / 2, H / 2, Math.max(W, H) * 0.75);
-      v.addColorStop(0, 'rgba(120,96,60,0)');
-      v.addColorStop(1, 'rgba(120,96,60,0.10)');
+      v.addColorStop(0, tone('rgba(120,96,60,0)'));
+      v.addColorStop(1, tone('rgba(120,96,60,0.10)'));
       g.fillStyle = v;
       g.fillRect(0, 0, W, H);
       break;
     }
-    case 'clean': {
+    case 'dots': {
       const gr = g.createLinearGradient(0, 0, W, H);
-      gr.addColorStop(0, '#f7f8fc');
-      gr.addColorStop(1, '#eef1f8');
+      gr.addColorStop(0, tone('#f7f8fc'));
+      gr.addColorStop(1, tone('#eef1f8'));
       g.fillStyle = gr;
       g.fillRect(0, 0, W, H);
-      g.fillStyle = 'rgba(17,24,39,0.045)';
+      g.fillStyle = tone('rgba(17,24,39,0.045)');
       const step = 48;
       for (let y = step / 2; y < H; y += step) for (let x = step / 2; x < W; x += step) g.fillRect(x - 1.2, y - 1.2, 2.4, 2.4);
       break;
     }
     case 'chalk': {
       const gr = g.createRadialGradient(W * 0.45, H * 0.4, 0, W / 2, H / 2, Math.max(W, H) * 0.8);
-      gr.addColorStop(0, '#2a4a3b');
-      gr.addColorStop(1, '#1b3127');
+      gr.addColorStop(0, tone('#2a4a3b'));
+      gr.addColorStop(1, tone('#1b3127'));
       g.fillStyle = gr;
       g.fillRect(0, 0, W, H);
       for (let i = 0; i < 26; i++) {
@@ -252,40 +308,40 @@ export function makeBackground(theme, W, H, seed = 1) {
         const y = rand() * H;
         const r = 80 + rand() * 320;
         const s = g.createRadialGradient(x, y, 0, x, y, r);
-        s.addColorStop(0, 'rgba(235,240,230,0.035)');
-        s.addColorStop(1, 'rgba(235,240,230,0)');
+        s.addColorStop(0, tone('rgba(235,240,230,0.035)'));
+        s.addColorStop(1, tone('rgba(235,240,230,0)'));
         g.fillStyle = s;
         g.fillRect(x - r, y - r, r * 2, r * 2);
       }
-      noise(Math.round(W * H * 0.03), 0.06, '#e8efe6');
+      noise(Math.round(W * H * 0.03), 0.06, tone('#e8efe6'));
       break;
     }
-    case 'blueprint': {
+    case 'grid': {
       const gr = g.createLinearGradient(0, 0, 0, H);
-      gr.addColorStop(0, '#14589d');
-      gr.addColorStop(1, '#0f4680');
+      gr.addColorStop(0, tone('#14589d'));
+      gr.addColorStop(1, tone('#0f4680'));
       g.fillStyle = gr;
       g.fillRect(0, 0, W, H);
       const minor = Math.round(Math.min(W, H) / 34);
       g.lineWidth = 1;
       for (let x = 0; x <= W; x += minor) {
-        g.strokeStyle = x % (minor * 5) === 0 ? 'rgba(190,225,255,0.20)' : 'rgba(190,225,255,0.08)';
+        g.strokeStyle = tone(x % (minor * 5) === 0 ? 'rgba(190,225,255,0.20)' : 'rgba(190,225,255,0.08)');
         g.beginPath();
         g.moveTo(x + 0.5, 0);
         g.lineTo(x + 0.5, H);
         g.stroke();
       }
       for (let y = 0; y <= H; y += minor) {
-        g.strokeStyle = y % (minor * 5) === 0 ? 'rgba(190,225,255,0.20)' : 'rgba(190,225,255,0.08)';
+        g.strokeStyle = tone(y % (minor * 5) === 0 ? 'rgba(190,225,255,0.20)' : 'rgba(190,225,255,0.08)');
         g.beginPath();
         g.moveTo(0, y + 0.5);
         g.lineTo(W, y + 0.5);
         g.stroke();
       }
-      noise(Math.round(W * H * 0.01), 0.05, '#ffffff');
+      noise(Math.round(W * H * 0.01), 0.05, tone('#ffffff'));
       break;
     }
-    case 'midnight': {
+    case 'glow': {
       g.fillStyle = theme.bg;
       g.fillRect(0, 0, W, H);
       const glow = (x, y, r, color) => {
@@ -295,9 +351,9 @@ export function makeBackground(theme, W, H, seed = 1) {
         g.fillStyle = s;
         g.fillRect(0, 0, W, H);
       };
-      glow(W * 0.12, H * 0.08, Math.max(W, H) * 0.6, 'rgba(34,211,238,0.10)');
-      glow(W * 0.92, H * 0.95, Math.max(W, H) * 0.55, 'rgba(167,139,250,0.10)');
-      noise(Math.round(W * H * 0.01), 0.05, '#ffffff');
+      glow(W * 0.12, H * 0.08, Math.max(W, H) * 0.6, tone('rgba(34,211,238,0.10)'));
+      glow(W * 0.92, H * 0.95, Math.max(W, H) * 0.55, tone('rgba(167,139,250,0.10)'));
+      noise(Math.round(W * H * 0.01), 0.05, tone('#ffffff'));
       break;
     }
     default:

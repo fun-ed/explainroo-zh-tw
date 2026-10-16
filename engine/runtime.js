@@ -1,19 +1,19 @@
 // Boots the engine in a page: loads the project state, fonts, icons, images
 // and scenes, then exposes frame rendering, checks and the soundtrack.
-import rough from '/vendor/rough.js';
-import { Stage, SceneError } from './stage.js';
-import { getTheme, makeBackground, fontString } from './themes.js';
+import rough from '../vendor/rough.js';
+import { Stage, SceneError, boundsRecorder } from './stage.js';
+import { getTheme, makeBackground, fontString, colorOf } from './themes.js';
 import { Pen } from './pen.js';
 import { drawTransition } from './transitions.js';
 import { buildPhrases, drawCaptions } from './captions.js';
-import { hashStr, mulberry32, suggest, contrast, opaque, withAlpha } from './util.js';
+import { hashStr, mulberry32, suggest, suggestColor, contrast, opaque, withAlpha, parseColor, rgba } from './util.js';
 import { layoutAreas } from './layout.js';
+import { loadClips, ClipFrames } from './clips.js';
 import { UI } from './ui.js';
 import { playbackTextIssue } from './readability.js';
+import { planCamera, cameraAt, cameraMoving, continues, frameRect, backgroundShot } from './director.js';
 
 Stage.UI = UI;
-
-const AUTO_TRANSITION = { paper: 'brush', clean: 'slide', chalk: 'brush', blueprint: 'wipe', midnight: 'zoom' };
 
 export async function fetchState() {
   const res = await fetch('/__state.json', { cache: 'no-store' });
@@ -21,12 +21,13 @@ export async function fetchState() {
   return res.json();
 }
 
-async function loadFonts(theme, config) {
-  const manifest = await (await fetch('/fonts/fonts.json')).json();
+async function loadFonts(theme, config, root = '/') {
+  const manifest = await (await fetch(root + 'fonts/fonts.json')).json();
   const wanted = new Set(Object.values(theme.fonts).map((f) => f.family));
   // The UI kit (s.ui) draws app screens in Inter and headlines in Instrument Serif.
   wanted.add('Inter');
   wanted.add('Instrument Serif');
+  wanted.add('Noto Sans Devanagari');
   const faces = [];
   const add = (family, url, o) => {
     const face = new FontFace(family, `url(${url})`, { weight: String(o.weight ?? 400), style: o.style ?? 'normal', unicodeRange: o.unicodeRange, display: 'block' });
@@ -35,22 +36,26 @@ async function loadFonts(theme, config) {
       throw new Error(`font "${family}" from ${url} could not be loaded`);
     }));
   };
-  for (const f of manifest) if (wanted.has(f.family)) add(f.family, `/fonts/${f.file}`, f);
+  for (const f of manifest) if (root === './' || wanted.has(f.family)) add(f.family, `${root}fonts/${f.file}`, f);
+  if (root !== './' && ['ja', 'zh'].includes(config.language)) {
+    const family = config.language === 'ja' ? 'Noto Sans JP' : 'Noto Sans SC';
+    for (const weight of [400, 700]) add(family, `/language-fonts/${config.language}-${weight}.otf`, { weight });
+  }
   // A video's own fonts, from "fonts" in video.json.
-  for (const f of config.fonts || []) add(f.family, '/project/' + f.src.split('/').map(encodeURIComponent).join('/'), f);
+  for (const f of config.fonts || []) add(f.family, root + 'project/' + f.src.split('/').map(encodeURIComponent).join('/'), f);
   await Promise.all(faces);
   // Make sure every weight used by the theme is ready before the first frame.
   await Promise.all(Object.values(theme.fonts).map((f) => document.fonts.load(`${f.weight} 40px "${f.family}"`)));
 }
 
-async function loadImages(assets) {
+async function loadImages(assets, root = '/') {
   const images = new Map();
   await Promise.all(
     assets
       .filter((a) => /\.(png|jpe?g|webp|gif|svg)$/i.test(a))
       .map(async (a) => {
         const img = new Image();
-        img.src = '/project/' + a.split('/').map(encodeURIComponent).join('/');
+        img.src = root + 'project/' + a.split('/').map(encodeURIComponent).join('/');
         await img.decode().catch(() => {
           throw new Error(`image ${a} could not be decoded`);
         });
@@ -61,7 +66,7 @@ async function loadImages(assets) {
 }
 
 export class Engine {
-  constructor({ canvas, state, scenes, icons, images, scale = 1, sfxNames = [] }) {
+  constructor({ canvas, state, scenes, icons, images, clips = new Map(), scale = 1, transparent = false, sfxNames = [] }) {
     const { config, timeline } = state;
     this.state = state;
     this.config = config;
@@ -76,11 +81,18 @@ export class Engine {
     this.appArea = areas.app;
     this.fps = config.fps;
     this.scale = scale;
-    this.theme = getTheme(config.theme);
+    this.transparent = transparent;
+    this.theme = getTheme(config.theme, config.look);
     this.pen = new Pen({ rough, theme: this.theme });
     this.icons = icons;
     this.iconCache = new Map();
+    this.mathCache = new Map();
+    this.lateMath = new Map();
+    this.collectingMath = false;
     this.images = images;
+    this.clips = clips;
+    this.clipFrames = new ClipFrames();
+    this.clipProbe = null;
     this.sfxNames = sfxNames;
     this.sfxMode = config.sfx;
     this.recorder = null;
@@ -90,8 +102,8 @@ export class Engine {
     // H.264 needs even dimensions.
     canvas.width = 2 * Math.round((this.W * scale) / 2);
     canvas.height = 2 * Math.round((this.H * scale) / 2);
-    this.ctx = canvas.getContext('2d', { alpha: false });
-    this.background = makeBackground(this.theme, this.W, this.H, config.seed);
+    this.ctx = canvas.getContext('2d', { alpha: transparent });
+    this.background = transparent ? null : makeBackground(this.theme, this.W, this.H, config.seed);
     this.phrases = config.captions ? buildPhrases(timeline, this.H > this.W ? 28 : 46) : [];
     this.buffers = [0, 1].map(() => {
       const c = document.createElement('canvas');
@@ -116,6 +128,98 @@ export class Engine {
     return img;
   }
 
+  clip(src) {
+    const key = src.replace(/^\.?\//, '');
+    const clip = this.clips.get(key) || this.clips.get('assets/' + key);
+    if (!clip) throw new SceneError(`clip "${src}" not found. Put an MP4, MOV, WebM or M4V in the project's assets/ folder. Available: ${[...this.clips.keys()].join(', ') || 'none'}`);
+    return clip;
+  }
+
+  clipImage(clip, frame) {
+    if (this.recorder) return null;
+    if (clip.video) {
+      const video = clip.video;
+      const time = Math.min(frame / clip.fps, Math.max(0, clip.duration - 0.04));
+      if (!video.seeking && Math.abs(video.currentTime - time) > 0.04) video.currentTime = time;
+      return video.readyState >= 2 ? video : null;
+    }
+    const key = this.clipFrames.key(clip, frame);
+    if (this.clipProbe) {
+      this.clipProbe.set(key, { clip, frame });
+      return null;
+    }
+    const img = this.clipFrames.get(clip, frame);
+    if (img) return img;
+    if (this.clipFrames.errors.has(key)) throw this.clipFrames.errors.get(key);
+    this.clipFrames.load(clip, frame).then(() => {
+      this.clipFrames.trim();
+      this.onClipFrame?.();
+    }).catch((e) => {
+      this.clipFrames.errors.set(key, e);
+      this.onClipFrame?.();
+    });
+    return this.clipFrames.nearest(clip, frame);
+  }
+
+  // Loads the clip frames that time T shows. It finds them by drawing the
+  // frame on `ctx`. Motion blur passes a spare canvas here, so the picture it
+  // is adding up on the main canvas stays as it is.
+  async prepareFrame(T, ctx = this.ctx) {
+    if (!this.clips.size) return;
+    const needed = new Map();
+    this.clipProbe = needed;
+    try { this.renderFrame(T, ctx); }
+    finally { this.clipProbe = null; }
+    await Promise.all([...needed.values()].map(({ clip, frame }) => this.clipFrames.load(clip, frame)));
+    this.clipFrames.trim(new Set(needed.keys()));
+  }
+
+  mathData(tex, display, scene, t) {
+    const key = JSON.stringify([tex, display]);
+    if (this.staticMath) return this.staticMath[key] || { error: 'formula missing from the player. Export the project again.' };
+    if (this.collectingMath) {
+      if (!this.mathCache.has(key)) this.mathCache.set(key, null);
+      return null;
+    }
+    if (!this.mathCache.has(key)) {
+      this.lateMath.set(key, { scene, t, tex });
+      // Late formulas still draw synchronously, including the frame that finds them.
+      const req = new XMLHttpRequest();
+      req.open('GET', this.mathURL(tex, display), false);
+      req.send();
+      this.mathCache.set(key, this.mathResponse(req.status, req.responseText));
+    }
+    return this.mathCache.get(key);
+  }
+
+  mathURL(tex, display) {
+    return `/__math?tex=${encodeURIComponent(tex)}&display=${display ? '1' : '0'}`;
+  }
+
+  mathResponse(status, body) {
+    if (status !== 200) {
+      try { return { error: JSON.parse(body).error || body }; } catch { return { error: body }; }
+    }
+    return JSON.parse(body);
+  }
+
+  async loadMath() {
+    this.collectingMath = true;
+    try {
+      for (const sc of this.timeline.scenes) {
+        // Scene errors belong to check or render, as they do without formulas.
+        try { this.drawScene(this.ctx, sc.index, 0); } catch {}
+      }
+    } finally {
+      this.collectingMath = false;
+    }
+    await Promise.all([...this.mathCache.keys()].map(async key => {
+      const [tex, display] = JSON.parse(key);
+      const res = await fetch(this.mathURL(tex, display));
+      this.mathCache.set(key, this.mathResponse(res.status, await res.text()));
+    }));
+  }
+
   sceneAt(T) {
     const list = this.timeline.scenes;
     let i = list.length - 1;
@@ -124,23 +228,76 @@ export class Engine {
   }
 
   transitionFor(sc) {
-    const name = sc.transition === 'auto' ? AUTO_TRANSITION[this.theme.name] : sc.transition;
+    // A scene that goes on with the picture before it fades into it. A wipe
+    // or a slide would break that picture apart.
+    if (sc.transition === 'auto' && this.continued?.has(sc.index)) return 'fade';
+    const name = sc.transition === 'auto' ? this.theme.transition : sc.transition;
+    if (this.transparent && ['slide', 'wipe', 'brush'].includes(name)) return 'fade';
     return name || 'fade';
   }
 
   drawScene(ctx, index, t) {
     const sc = this.timeline.scenes[index];
+    if (this.transparent) {
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+    }
     ctx.setTransform(this.scale, 0, 0, this.scale, 0, 0);
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = 'source-over';
-    ctx.drawImage(this.background, 0, 0, this.W, this.H);
+    const plan = !this.planning && !this.cameraOff ? this.cameraPlans?.get(index) : null;
+    // A scene drawn past its end, while the next one comes in, keeps the
+    // camera where it stopped, so a continued picture stays on top of itself.
+    const cam = plan ? cameraAt(plan, Math.min(t, plan.dur)) : null;
+    if (this.background) {
+      if (plan) {
+        // The background moves a third as much as the camera, so it looks
+        // further away.
+        const bg = backgroundShot(plan, cam);
+        const v = plan.view;
+        ctx.save();
+        ctx.translate(v.x + v.w / 2, v.y + v.h / 2);
+        ctx.scale(bg.z, bg.z);
+        ctx.translate(-bg.x, -bg.y);
+        ctx.drawImage(this.background, 0, 0, this.W, this.H);
+        ctx.restore();
+      } else ctx.drawImage(this.background, 0, 0, this.W, this.H);
+    }
     if (this.config.boil > 0) this.pen.seedOffset = Math.floor((sc.start + t) * this.config.boil) % 997;
     const saved = Math.random;
     Math.random = mulberry32(hashStr(`random:${sc.id}`));
-    const s = new Stage(this, ctx, sc, t);
     ctx.save();
+    // The automatic camera films the scene unless the scene moves its own.
+    if (plan) {
+      const v = plan.view;
+      ctx.translate(v.x + v.w / 2, v.y + v.h / 2);
+      ctx.scale(cam.z, cam.z);
+      ctx.translate(-cam.x, -cam.y);
+      if (cameraMoving(plan, t)) this.moving = true;
+    }
+    const s = new Stage(this, ctx, sc, t);
+    // While the camera is planned, anything a scene draws straight on s.ctx
+    // is measured as one block that the camera must not cut.
+    let raw = null;
+    let api = s;
+    if (this.planning && this.layoutLog) {
+      raw = boundsRecorder(ctx, this.scale, { W: this.W, H: this.H });
+      // The UI kit draws on the same recorder; its panels and headlines
+      // still report their own times.
+      let ui = null;
+      api = new Proxy(s, {
+        get: (target, prop) => {
+          if (prop === 'ctx') return raw.proxy;
+          if (prop === 'ui') return (ui ??= new Stage.UI(api));
+          const v = target[prop];
+          return typeof v === 'function' ? v.bind(target) : v;
+        },
+      });
+    }
     try {
-      this.scenesModule[sc.id](s);
+      this.scenesModule[sc.id](api);
+      const ink = raw?.box();
+      if (ink) this.layoutLog.push({ kind: 'ink', at: 0, out: Infinity, box: ink });
     } catch (e) {
       const err = e instanceof Error ? e : new Error(String(e));
       err.scene = sc.id;
@@ -153,7 +310,52 @@ export class Engine {
     return s;
   }
 
-  renderFrame(T, ctx = this.ctx) {
+  // Measures every scene once and plans its camera. A scene that continues
+  // the picture of the scene before it starts where that camera stopped,
+  // and the two dissolve into each other. Scene errors are left to check
+  // and render, which report them with their time.
+  planCameras() {
+    this.cameraPlans = new Map();
+    this.continued = new Set();
+    if (this.config.camera === 'still') return;
+    const scratch = document.createElement('canvas');
+    scratch.width = 16;
+    scratch.height = 16;
+    const ctx = scratch.getContext('2d');
+    const view = this.safeArea;
+    const frame = { W: this.W, H: this.H };
+    // The part of the frame that captions and app overlays leave free.
+    const usable = { x0: 0, y0: 0, x1: this.W, y1: this.H };
+    if (this.appArea) Object.assign(usable, { x0: this.appArea.left, y0: this.appArea.top, x1: this.appArea.right, y1: this.appArea.bottom });
+    if (this.captionBand) usable.y1 = Math.min(usable.y1, this.captionBand.top);
+    const layouts = this.timeline.scenes.map((sc) => {
+      this.layoutLog = [];
+      this.planning = true;
+      this.manualCamera = false;
+      try {
+        this.drawScene(ctx, sc.index, Math.max(0, sc.dur - 0.01));
+        return this.manualCamera ? null : this.layoutLog.map((e) => ({ ...e, out: e.out ?? Infinity }));
+      } catch {
+        return null;
+      } finally {
+        this.layoutLog = null;
+        this.planning = false;
+      }
+    });
+    this.timeline.scenes.forEach((sc, i) => {
+      if (!layouts[i]) return;
+      const prev = i > 0 ? this.cameraPlans.get(i - 1) : null;
+      const linked = prev && layouts[i - 1] && sc.transition !== 'none' && continues(layouts[i - 1], layouts[i], frameRect(cameraAt(prev, prev.dur), view, frame));
+      const voiceEnd = sc.voice ? sc.lead + sc.voice.dur : null;
+      const still = linked ? Math.min(this.timeline.transitionSeconds, sc.dur * 0.5) : 0;
+      const plan = planCamera(layouts[i], { dur: sc.dur, view, frame, pace: this.timeline.pace || 1, voiceEnd, from: linked ? cameraAt(prev, prev.dur) : null, still, usable });
+      if (!plan) return;
+      this.cameraPlans.set(i, plan);
+      if (linked) this.continued.add(i);
+    });
+  }
+
+  renderFrame(T, ctx = this.ctx, { captions = true } = {}) {
     const i = this.sceneAt(T);
     const sc = this.timeline.scenes[i];
     const t = T - sc.start;
@@ -162,13 +364,18 @@ export class Engine {
     if (i > 0 && sc.transition !== 'none' && trName !== 'cut' && t < trDur) {
       const prev = this.timeline.scenes[i - 1];
       const [a, b] = this.buffers;
-      this.drawScene(a.getContext('2d', { alpha: false }), i - 1, T - prev.start);
-      this.drawScene(b.getContext('2d', { alpha: false }), i, t);
-      drawTransition(trName, ctx, a, b, t / trDur, this.W, this.H, hashStr(sc.id));
+      if (this.transparent) {
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+      }
+      this.moving = true;
+      this.drawScene(a.getContext('2d', { alpha: this.transparent }), i - 1, T - prev.start);
+      this.drawScene(b.getContext('2d', { alpha: this.transparent }), i, t);
+      drawTransition(trName, ctx, a, b, t / trDur, this.W, this.H, hashStr(sc.id), this.transparent);
     } else {
       this.drawScene(ctx, i, t);
     }
-    if (this.phrases.length) {
+    if (captions && this.phrases.length) {
       ctx.setTransform(this.scale, 0, 0, this.scale, 0, 0);
       drawCaptions(ctx, this.phrases, T, this.theme, this.W, this.H, this.captionArea);
     }
@@ -190,7 +397,7 @@ export class Engine {
     ctx.save();
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = 'source-over';
-    ctx.font = fontString(th, 'body', size, th.fonts.body.family === 'Inter' ? 600 : th.fonts.body.family === 'Kalam' ? 700 : undefined);
+    ctx.font = fontString(th, 'body', size, th.fonts.body.family === 'Inter' ? 600 : th.fonts.body.family === 'Kalam' ? 700 : undefined, this.config.language);
     ctx.textAlign = 'right';
     ctx.textBaseline = 'middle';
     const w = ctx.measureText(text).width;
@@ -247,8 +454,10 @@ export class Engine {
   // Sound cues for the soundtrack: element entrances, explicit s.sfx() calls
   // and scene transitions, thinned so effects never pile up.
   sfxCues() {
-    if (this.config.sfx === false) return { cues: [], errors: [] };
+    if (this.config.sfx === false && !this.clips.size) return { cues: [], clips: [], errors: [] };
     const { events, errors } = this.collectEvents();
+    const clips = events.filter((e) => e.kind === 'clip' && e.volume > 0 && e.speed === 1 && e.hasAudio).map((e) => ({ ...e, start: e.T, end: e.T + e.end - e.at }));
+    if (this.config.sfx === false) return { cues: [], clips, errors };
     const cues = [];
     for (const e of events) {
       if (!e.sfx) continue;
@@ -282,13 +491,30 @@ export class Engine {
       last.set(c.name, c.t);
       out.push(c);
     }
-    return { cues: out, errors };
+    return { cues: out, clips, errors };
   }
 
   // Samples every scene and reports layout problems.
   check(step = 0.25, viewWidth = null) {
+    // check looks at the layout as written. The automatic camera only ever
+    // moves in, which makes text larger, and it may leave the edges out of
+    // a close-up on purpose.
+    this.cameraOff = true;
+    try {
+      return this._check(step, viewWidth);
+    } finally {
+      this.cameraOff = false;
+    }
+  }
+
+  _check(step, viewWidth) {
     const issues = [];
     const add = (level, scene, t, message) => issues.push({ level, scene, t: t === null ? null : Math.round(t * 100) / 100, message });
+    if (this.config.look) {
+      for (const [key, min] of [['ink', 4.5], ['muted', 3]]) {
+        if (contrast(this.theme[key], this.theme.bg) < min) add('warn', null, null, `${this.config.theme}: ${key} has low contrast against bg; use colors with a contrast of at least ${min}`);
+      }
+    }
     for (const id of this.extraScenes) add('warn', id, null, `scenes.js has a function "${id}" but script.md has no scene with that id, so it is never shown`);
     const scratch = document.createElement('canvas');
     scratch.width = this.canvas.width;
@@ -298,6 +524,22 @@ export class Engine {
     const margin = Math.round(Math.min(W, H) * 0.035);
     const minSize = Math.round(Math.min(W, H) * 0.022);
     const uiMinSize = Math.round(Math.min(W, H) * 0.015);
+    const colors = Object.fromEntries(['ink', 'accent', ...Object.keys(this.theme.colors)].map(name => [name, colorOf(this.theme, name)]));
+    let colorCtx;
+    const cssColor = color => {
+      if (parseColor(color)) return color;
+      if (!colorCtx) {
+        const canvas = document.createElement('canvas');
+        canvas.width = canvas.height = 1;
+        colorCtx = canvas.getContext('2d');
+      }
+      colorCtx.clearRect(0, 0, 1, 1);
+      colorCtx.fillStyle = '#000000';
+      colorCtx.fillStyle = color;
+      colorCtx.fillRect(0, 0, 1, 1);
+      const [r, g, b, a] = colorCtx.getImageData(0, 0, 1, 1).data;
+      return rgba({ r, g, b, a: a / 255 });
+    };
     const reported = new Set();
     const once = (key, fn) => {
       if (reported.has(key)) return;
@@ -346,7 +588,10 @@ export class Engine {
           const least = tx.ui ? uiMinSize : minSize;
           if (!tx.block && Math.round(tx.size) < least) once(`small:${sc.id}:${tx.text}`, () => add('warn', sc.id, t, `"${label}" is ${Math.round(tx.size)}px, hard to read (use at least ${least}px)`));
           const bg = opaque(tx.bg || this.theme.bg, this.theme.bg);
-          if (typeof tx.fg === 'string' && contrast(tx.fg, bg) < 3) once(`contrast:${sc.id}:${tx.text}`, () => add('warn', sc.id, t, `"${label}" has low contrast against its background`));
+          if (typeof tx.fg === 'string' && contrast(tx.fg, bg) < 3) once(`contrast:${sc.id}:${tx.text}`, () => {
+            const suggestion = suggestColor(cssColor(tx.fg), cssColor(bg), tx.size, Object.fromEntries(Object.entries(colors).map(([name, c]) => [name, cssColor(c)])));
+            add('warn', sc.id, t, `"${label}" has low contrast against its background (${contrast(tx.fg, bg).toFixed(1)}:1); use color: '${suggestion.color}' (${suggestion.ratio.toFixed(1)}:1)`);
+          });
         }
         // Overlaps only count when both are fully shown, not mid-fade.
         const solid = texts.filter((x) => x.alpha > 0.95);
@@ -371,6 +616,10 @@ export class Engine {
       this.textLog = null;
       const times = [...new Set(entrances.map((e) => Math.round(e.at * 100) / 100))].sort((a, b) => a - b);
       for (const e of entrances) {
+        if (e.kind === 'clip') {
+          if (e.volume > 0 && e.speed !== 1) once(`clip-sound:${sc.id}:${e.key}`, () => add('warn', sc.id, e.at, `clip "${e.src}" stays silent at speed ${e.speed}; use speed: 1 for its sound`));
+          if (!e.loop && e.out - e.end > 1) once(`clip-freeze:${sc.id}:${e.key}`, () => add('hint', sc.id, e.end, `clip "${e.src}" freezes on its last frame from ${e.end.toFixed(2)}s until ${e.out.toFixed(2)}s; use loop: true or an earlier out`));
+        }
         if (e.at > sc.dur) once(`late:${sc.id}:${e.key}`, () => add('error', sc.id, e.at, `a ${e.kind} is set to appear at ${e.at.toFixed(2)}s but the scene ends at ${sc.dur.toFixed(2)}s`));
       }
       if (!times.length) {
@@ -389,30 +638,36 @@ export class Engine {
       add('hint', c.scene, null, `cue "${c.word}" means the first of the ${c.count} times it is spoken in this scene; if you meant a later one, use s.cue("${c.word}", 2) or a [#marker]`);
     }
     this.cueNotes = null;
+    for (const { scene, t, tex } of this.lateMath.values()) add('error', scene, t, `math "${tex}" was not collected at the start; keep TeX strings fixed and always call s.math with at and out for timing`);
     return issues;
   }
 }
 
 // Boots the engine for render, check or studio pages.
-export async function boot({ canvas, scale = 1, version = '' }) {
-  const state = await fetchState();
-  const theme = getTheme(state.config.theme);
-  const [icons, images, scenesMod, audio, iconTags] = await Promise.all([
-    fetch('/engine/icons/lucide.json').then((r) => r.json()).then((j) => {
+export async function boot({ canvas, scale = 1, transparent = false, version = '', player = false }) {
+  const root = player ? './' : '/';
+  const state = player ? await (await fetch('./state.json')).json() : await fetchState();
+  const theme = getTheme(state.config.theme, state.config.look);
+  const [icons, images, scenesMod, audio, iconTags, clips] = await Promise.all([
+    fetch(root + 'engine/icons/lucide.json').then((r) => r.json()).then((j) => {
       // Old Lucide names keep working.
       for (const [alias, target] of Object.entries(j.aliases || {})) if (!j.icons[alias]) j.icons[alias] = j.icons[target];
       return j.icons;
     }),
-    loadImages(state.assets),
-    import(`/project/scenes.js?v=${encodeURIComponent(version || state.version)}`),
-    import('/engine/audio/soundtrack.js').catch((e) => ({ SFX: {}, loadError: e })),
-    fetch('/engine/icons/lucide-tags.json').then((r) => r.json()),
-    loadFonts(theme, state.config),
+    loadImages(state.assets, root),
+    import(player ? '../project/scenes.js' : `/project/scenes.js?v=${encodeURIComponent(version || state.version)}`),
+    player ? { SFX: {} } : import('./audio/soundtrack.js').catch((e) => ({ SFX: {}, loadError: e })),
+    player ? {} : fetch('/engine/icons/lucide-tags.json').then((r) => r.json()),
+    loadClips(state.assets, player ? state : null),
+    loadFonts(theme, state.config, root),
   ]);
   const scenes = scenesMod.default;
   if (!scenes || typeof scenes !== 'object') throw new Error('scenes.js must "export default { sceneId(s) { ... } }"');
-  const engine = new Engine({ canvas, state, scenes, icons, images, scale, sfxNames: Object.keys(audio.SFX) });
+  const engine = new Engine({ canvas, state, scenes, icons, images, clips, scale, transparent, sfxNames: Object.keys(audio.SFX) });
   engine.iconTags = iconTags;
+  if (player) engine.staticMath = await (await fetch('./math.json')).json();
+  else await engine.loadMath();
+  engine.planCameras();
   return { engine, audio, state };
 }
 
@@ -420,7 +675,7 @@ export async function boot({ canvas, scale = 1, version = '' }) {
 export async function renderAudio(engine, audio, { sampleRate = 48000 } = {}) {
   if (audio.loadError) throw new Error(`audio engine failed to load: ${audio.loadError.message}`);
   const { timeline, config } = engine.state;
-  const { cues, errors } = engine.sfxCues();
+  const { cues, clips, errors } = engine.sfxCues();
   const buffer = await audio.renderSoundtrack({
     duration: timeline.duration,
     sampleRate,
@@ -428,6 +683,7 @@ export async function renderAudio(engine, audio, { sampleRate = 48000 } = {}) {
     voiceSpans: timeline.voiceSpans,
     music: config.music,
     sfx: cues,
+    clips,
     scenes: timeline.scenes.map((s) => ({ start: s.start, dur: s.dur })),
   });
   return { buffer, cues, errors };

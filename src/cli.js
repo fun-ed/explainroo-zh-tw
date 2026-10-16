@@ -6,14 +6,18 @@ import { layoutAreas } from '../engine/layout.js';
 import { ScriptError } from './script.js';
 import { prepare, makeState } from './pipeline.js';
 import { render } from './render.js';
+import { exportPlayer } from './export.js';
 import { check, stills, sheet, verify } from './qa.js';
 import { startServer, ROOT } from './server.js';
-import { VOICES, loadTTS, loadASR, cacheRoot, ttsDtype, TTS_SAMPLE_RATE } from './models.js';
+import { VOICES, LANGUAGES, voiceLanguage, loadTTS, loadASR, cacheRoot, ttsDtype, TTS_SAMPLE_RATE, MULTILINGUAL_ASR_MODEL } from './models.js';
+import { espeakVersion, misakiAvailable, phonemize, generateSpeech } from './phonemes.js';
 import { writeWav } from './wav.js';
-import { isZhVoice, zhSpeak, edgeTTSCommand, ZH_DEFAULT_VOICE } from './zhvoice.js';
+import { isZhVoice, zhSpeak, edgeTTSCommand } from './zhvoice.js';
 import { ffmpegVersion } from './ffmpeg.js';
 import { findChrome } from './browser.js';
 import { generateImage, imageLog, imageSpend, IMAGE_MODELS } from './images.js';
+import { elevenVoices, elevenUsage, elevenSpeed } from './elevenlabs.js';
+import { capture } from './capture.js';
 
 const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
 
@@ -22,14 +26,19 @@ const HELP = `explainroo ${VERSION}: narrated explainer videos from code
 Usage: explainroo <command> [project] [options]
 
 Make a video
-  init <dir>            create a project (--theme, --size, --pace, --voice, --title, --lang zh-TW)
-  voice [project]       generate narration and word timings (cached)
-  preview [project]     live preview in your browser, reloads on save (--port)
-  still [project] [t…]  PNG stills: "12.5", "scene", "scene@2.4" (default: end of every scene)
-  sheet [project]       contact sheet of the whole video (--scene id, --every s)
-  check [project]       find layout, timing and pronunciation problems (--view-width pixels)
-  render [project]      write out/video.mp4 (--draft, --from s, --to s, --workers n, --out file)
-  verify [project]      check the rendered file: loudness, black frames, narration
+  init <dir>            create a project (--theme, --size, --pace, --language en|es|fr|it|pt-br|hi|ja|zh|zh-TW, --lang zh-TW, --voice, --title)
+  voice [project]       make the narration (Kokoro, ElevenLabs or a recording) and word timings
+  preview [project]     live preview in your browser, reloads on save (--port, --size)
+  still [project] [t…]  PNG stills: "12.5", "scene", "scene@2.4" (default: end of every scene; --size, --transparent)
+  sheet [project]       contact sheet of the whole video (--scene id, --every s, --size)
+  check [project]       find layout, timing and pronunciation problems (--view-width pixels, --size)
+  render [project]      write the video with subtitles, chapters and a cover (--format mp4|gif|webm|mov,
+                        --transparent, --size, --draft, --from s, --to s, --workers n, --out file)
+  verify [project]      check the video: loudness, black frames, narration (--file)
+  export [project]      write a web player folder (--out dir, default: out/player/)
+
+Product demos
+  capture [project] <url>  save screenshots, wording, colors, fonts and logo of a live site (--mobile)
 
 Images (optional, needs an OpenRouter API key)
   image [project] <name> "<what to draw>"   save an illustration as assets/<name>.png
@@ -37,13 +46,16 @@ Images (optional, needs an OpenRouter API key)
   images [project]      list generated images and what they cost
 
 Reference
-  voices                list voices (and the zh_TW voices installed on this Mac); "explainroo say 'text' --voice am_michael" to hear one
+  voices [project]      list voices, including installed macOS zh_TW voices (--language, --elevenlabs)
+  say "text"            hear a voice (--voice, --speed 1, --pitch 0 for zh-TW, --out sample.wav)
   themes                list looks
   formats               list sizes for YouTube, Shorts, TikTok, Reels, Instagram, LinkedIn
   icons <word…>         search the 1,800+ built-in icons
-  doctor                check ffmpeg, Chrome and the speech models (--fetch downloads them)
+  doctor                check ffmpeg, Chrome, espeak-ng, misaki and models (--fetch downloads English models)
 
-Options: --json for machine-readable output. The project defaults to the current folder.
+Options: --size <size> overrides video.json for preview, still, sheet, check and render.
+         Size outputs get a suffix, like video-tiktok.mp4. --out still wins.
+         --json for machine-readable output. The project defaults to the current folder.
 Docs: AGENTS.md (for coding agents) and https://www.explainroo.com/docs/`;
 
 function parseArgs(argv) {
@@ -61,10 +73,11 @@ function parseArgs(argv) {
   }
   return { pos, flags };
 }
-const BOOL = new Set(['json', 'draft', 'force', 'fetch', 'help', 'version', 'quiet', 'open', 'no-style']);
+const BOOL = new Set(['json', 'draft', 'transparent', 'force', 'fetch', 'help', 'version', 'quiet', 'open', 'no-style', 'elevenlabs', 'mobile']);
 
 function num(v, name) {
   if (v === undefined) return undefined;
+  if (v === true) throw new ProjectError(`--${name} needs a value`);
   const n = Number(v);
   if (!Number.isFinite(n)) throw new ProjectError(`--${name} must be a number`);
   return n;
@@ -92,32 +105,49 @@ export async function main(argv) {
   try {
     switch (cmd) {
       case 'init': return init(pos[0], flags, print);
-      case 'voice': {
-        const project = loadProject(pos[0]);
-        const { voices, timeline } = await prepare(project, { log, force: !!flags.force });
-        const rows = project.script.scenes.map((s) => {
-          const v = voices[s.id];
-          return { scene: s.id, voice: v.duration, confirmed: v.matchRate, unconfirmed: v.unmatched, marks: v.marks };
-        });
-        print(rows.map((r) => `${r.scene.padEnd(18)} ${r.voice.toFixed(1).padStart(5)}s  ${Math.round(r.confirmed * 100)}% confirmed${r.unconfirmed.length ? '  unconfirmed: ' + r.unconfirmed.slice(0, 6).join(', ') : ''}`).join('\n') + `\ntotal ${timeline.duration.toFixed(1)}s`, { scenes: rows, duration: timeline.duration });
+      case 'capture': {
+        if (pos.length < 1 || pos.length > 2) throw new ProjectError('usage: explainroo capture [project] <url> [--mobile] [--json]');
+        const r = await capture(pos.length === 2 ? pos[0] : undefined, pos.at(-1), { mobile: !!flags.mobile });
+        const families = r.fonts.families.map((f) => f.family).join(', ') || 'none found';
+        print(`saved:\n${r.files.map((f) => '  ' + f).join('\n')}\naccent: ${r.colors.accent || 'none found'}\nfonts: ${families}\nlogo: ${r.logo.picked || 'none found'}\n${r.notes.join('\n')}\nPaste into video.json:\n${JSON.stringify(r.suggestion, null, 2)}\nOpen the screenshots and check them before you use them.`, r);
         return 0;
       }
-      case 'preview': return preview(pos[0], flags, log);
+      case 'voice': {
+        const project = loadProject(pos[0]);
+        const before = elevenUsage(project).length;
+        const { voices, timeline } = await prepare(project, { log, force: !!flags.force });
+        const characters = elevenUsage(project).slice(before).reduce((n, e) => n + e.characters, 0);
+        const rows = project.script.scenes.map((s) => {
+          const v = voices[s.id];
+          return { scene: s.id, voice: v.duration, confirmed: v.matchRate, unconfirmed: v.unmatched, marks: v.marks,
+            ...(project.config.voice.provider === 'recording' && v.matchRate < 0.85 ? { message: 'The recording does not match script.md here. Make script.md say what was actually said.' } : {}) };
+        });
+        const mismatch = project.config.voice.provider === 'recording' && rows.some((r) => r.confirmed < 0.85)
+          ? '\nThe recording does not match script.md in those scenes. Make script.md say what was actually said.' : '';
+        const isEleven = project.config.voice.provider === 'elevenlabs';
+        const wanted = project.config.speed * project.config.pace;
+        const speed = elevenSpeed(wanted);
+        const speedNote = isEleven && speed !== wanted ? `\nElevenLabs speed ${wanted.toFixed(2)} is outside 0.7 to 1.2; using ${speed}.` : '';
+        const usage = isEleven ? `\nElevenLabs: ${characters} characters used` : '';
+        print(rows.map((r) => `${r.scene.padEnd(18)} ${r.voice.toFixed(1).padStart(5)}s  ${Math.round(r.confirmed * 100)}% confirmed${r.unconfirmed.length ? '  unconfirmed: ' + r.unconfirmed.slice(0, 6).join(', ') : ''}`).join('\n') + `\ntotal ${timeline.duration.toFixed(1)}s` + mismatch + usage + speedNote, { scenes: rows, duration: timeline.duration, ...(isEleven ? { characters, speed, ...(speed !== wanted ? { requested_speed: wanted } : {}) } : {}) });
+        return 0;
+      }
+      case 'preview': return await preview(pos[0], flags, log);
       case 'still': {
         const isProject = pos[0] && fs.existsSync(path.join(pos[0], 'video.json'));
-        const project = loadProject(isProject ? pos.shift() : undefined);
-        const list = await stills(project, pos, { log, scale: num(flags.scale, 'scale') ?? 1 });
+        const project = loadProject(isProject ? pos.shift() : undefined, { size: textFlag(flags, 'size') });
+        const list = await stills(project, pos, { log, scale: num(flags.scale, 'scale') ?? 1, transparent: !!flags.transparent });
         print(list.map((s) => `${s.label.padEnd(24)} ${s.file}`).join('\n'), { stills: list });
         return 0;
       }
       case 'sheet': {
-        const project = loadProject(pos[0]);
+        const project = loadProject(pos[0], { size: textFlag(flags, 'size') });
         const r = await sheet(project, { scene: flags.scene, every: num(flags.every, 'every'), cols: num(flags.cols, 'cols'), log });
         print(`${r.file} (${r.frames} frames)`, r);
         return 0;
       }
       case 'check': {
-        const project = loadProject(pos[0]);
+        const project = loadProject(pos[0], { size: textFlag(flags, 'size') });
         const r = await check(project, { log, step: num(flags.step, 'step') ?? 0.25, viewWidth: num(flags['view-width'], 'view-width') ?? null });
         const errors = r.issues.filter((i) => i.level === 'error').length;
         const human = r.issues.length
@@ -127,9 +157,15 @@ export async function main(argv) {
         return errors ? 1 : 0;
       }
       case 'render': {
+        const project = loadProject(pos[0], { size: textFlag(flags, 'size') });
+        const r = await render(project, { log, draft: !!flags.draft, transparent: !!flags.transparent, from: num(flags.from, 'from'), to: num(flags.to, 'to'), workers: num(flags.workers, 'workers'), scale: num(flags.scale, 'scale'), out: textFlag(flags, 'out'), format: textFlag(flags, 'format') });
+        print([r.out, r.subtitles?.srt, r.subtitles?.vtt, r.chapters, r.cover].filter(Boolean).map((f) => path.relative(process.cwd(), f) || f).join('\n'), r);
+        return 0;
+      }
+      case 'export': {
         const project = loadProject(pos[0]);
-        const r = await render(project, { log, draft: !!flags.draft, from: num(flags.from, 'from'), to: num(flags.to, 'to'), workers: num(flags.workers, 'workers'), scale: num(flags.scale, 'scale'), out: flags.out });
-        print(r.out, r);
+        const r = await exportPlayer(project, { log, out: textFlag(flags, 'out') });
+        print(`${r.out} (${r.duration.toFixed(1)}s)`, r);
         return 0;
       }
       case 'verify': {
@@ -167,10 +203,18 @@ export async function main(argv) {
         return 0;
       }
       case 'voices': {
-        print(Object.entries(VOICES).map(([k, v]) => `${k.padEnd(22)} ${v}`).join('\n'), { voices: VOICES });
+        const language = textFlag(flags, 'language');
+        if (language !== undefined) normalizeConfig({ language });
+        if (flags.elevenlabs) {
+          const voices = await elevenVoices(path.resolve(pos[0] || '.'));
+          print(voices.map((v) => `${v.name}  ${v.id}  ${Object.entries(v.labels).map(([k, x]) => `${k}: ${x}`).join(', ')}`).join('\n'), { voices });
+        } else {
+          const voices = Object.fromEntries(Object.entries(VOICES).filter(([id]) => language === undefined || voiceLanguage(id) === language));
+          print(Object.entries(voices).map(([k, v]) => `${k.padEnd(22)} ${voiceLanguage(k).padEnd(6)} ${v}`).join('\n') + '\nUse voices --elevenlabs for ElevenLabs, or set voice to { "provider": "recording", "src": "assets/narration.wav" } in video.json.', { voices, languages: Object.fromEntries(Object.keys(voices).map(id => [id, voiceLanguage(id)])) });
+        }
         return 0;
       }
-      case 'say': return say(pos.join(' '), flags, log, print);
+      case 'say': return await say(pos.join(' '), flags, log, print);
       case 'themes': {
         const desc = {
           paper: 'hand-drawn marker on warm paper; brush transitions; warm music',
@@ -178,8 +222,9 @@ export async function main(argv) {
           chalk: 'chalk on a green board with hatched fills; brush transitions; calm music',
           blueprint: 'white technical drafting on blueprint blue with a grid; wipe transitions; tech music',
           midnight: 'dark developer look with glowing accents; zoom transitions; tech music',
+          editorial: 'serif headlines and fine lines on warm paper, like a magazine; fade transitions; calm music',
         };
-        print(THEMES.map((t) => `${t.padEnd(10)} ${desc[t]}`).join('\n') + `\n\nmusic styles: ${MUSIC_STYLES.join(', ')}`, { themes: desc, music: MUSIC_STYLES });
+        print(THEMES.map((t) => `${t.padEnd(10)} ${desc[t]}`).join('\n') + `\n\nCustom looks: set theme in video.json to a relative .json file that extends a built-in look.\nmusic styles: ${MUSIC_STYLES.join(', ')}`, { themes: desc, music: MUSIC_STYLES });
         return 0;
       }
       case 'formats': {
@@ -191,11 +236,11 @@ export async function main(argv) {
           return { name, width: f.size[0], height: f.size[1], use: f.use, captions: cfg.captions, content: { x: safe.x, y: safe.y, w: safe.w, h: safe.h } };
         });
         const rows = info.map((r) => `${r.name.padEnd(10)} ${`${r.width}x${r.height}`.padEnd(10)} ${r.use}\n${''.padEnd(22)}content area ${r.content.w}x${r.content.h} at ${r.content.x},${r.content.y}${r.captions ? ', captions below it' : ''}`);
-        print(rows.join('\n') + '\n\nAlso: 16:9, 9:16, 1:1, 4:5 or WIDTHxHEIGHT. Set it with "size" in video.json or init --size.', { formats: info });
+        print(rows.join('\n') + '\n\nAlso: 16:9, 9:16, 1:1, 4:5 or WIDTHxHEIGHT. Set it with "size" in video.json or --size on init, preview, still, sheet, check or render.', { formats: info });
         return 0;
       }
       case 'icons': return icons(pos, print);
-      case 'doctor': return doctor(flags, log, print);
+      case 'doctor': return await doctor(flags, log, print);
       default:
         process.stderr.write(`unknown command "${cmd}"\n\n${HELP}\n`);
         return 2;
@@ -213,26 +258,39 @@ export async function main(argv) {
   }
 }
 
+// A text flag given without a value (for example "--title" at the end of the
+// line) parses as true. Name the flag instead of failing deep in string code.
+function textFlag(flags, name) {
+  if (flags[name] === true) throw new ProjectError(`--${name} needs a value`);
+  return flags[name];
+}
+
 function init(dir, flags, print) {
-  if (!dir) throw new ProjectError('usage: explainroo init <dir> [--theme paper] [--size youtube|tiktok|linkedin|...] [--pace 1.2] [--voice af_heart] [--title "..."]');
+  if (!dir) throw new ProjectError('usage: explainroo init <dir> [--theme paper] [--size youtube|tiktok|linkedin|...] [--pace 1.2] [--language es] [--voice af_heart] [--title "..."]');
   const target = path.resolve(dir);
   if (fs.existsSync(path.join(target, 'video.json'))) throw new ProjectError(`${target} already has a video.json`);
-  const theme = flags.theme || 'paper';
+  const theme = textFlag(flags, 'theme') || 'paper';
   if (!THEMES.includes(theme)) throw new ProjectError(`theme must be one of ${THEMES.join(', ')}`);
-  const lang = flags.lang || 'en';
-  if (!['en', 'zh-TW'].includes(lang)) throw new ProjectError('lang must be "en" or "zh-TW"');
-  const zh = lang === 'zh-TW';
-  const voice = flags.voice || (zh ? ZH_DEFAULT_VOICE : 'af_heart');
+  const lang = textFlag(flags, 'lang');
+  const requestedLanguage = textFlag(flags, 'language');
+  if (lang !== undefined && !['en', 'zh-TW'].includes(lang)) throw new ProjectError('lang must be "en" or "zh-TW"');
+  if (lang !== undefined && requestedLanguage !== undefined && lang !== requestedLanguage) throw new ProjectError('--lang and --language must agree');
+  const language = requestedLanguage ?? lang ?? (isZhVoice(textFlag(flags, 'voice') || '') ? 'zh-TW' : 'en');
+  const zh = language === 'zh-TW';
+  normalizeConfig({ language });
+  const voice = textFlag(flags, 'voice') || LANGUAGES[language];
   if (!VOICES[voice]) throw new ProjectError(`voice "${voice}" does not exist. Run "explainroo voices".`);
-  const title = flags.title || path.basename(target).replace(/[-_]+/g, ' ').replace(/^\w/, (c) => c.toUpperCase());
-  fs.mkdirSync(path.join(target, 'assets'), { recursive: true });
+  const title = textFlag(flags, 'title') || path.basename(target).replace(/[-_]+/g, ' ').replace(/^\w/, (c) => c.toUpperCase());
   const tpl = path.join(ROOT, 'templates', zh ? 'starter-zh' : 'starter');
-  const size = flags.size || '16:9';
+  const size = textFlag(flags, 'size') || '16:9';
   resolveSize(size);
-  // Chinese videos: Traditional Chinese captions on, no watermark.
   const config = zh ? { title, theme, size, voice, music: true, captions: true, watermark: false } : { title, theme, size, voice, music: true, captions: 'auto' };
+  if (requestedLanguage !== undefined || lang !== undefined || zh) config.language = language;
   if (flags.pace !== undefined) config.pace = num(flags.pace, 'pace');
   normalizeConfig(config);
+  // Create the folder only after every setting checks out, so a bad flag
+  // leaves nothing behind.
+  fs.mkdirSync(path.join(target, 'assets'), { recursive: true });
   fs.writeFileSync(path.join(target, 'video.json'), JSON.stringify(config, null, 2) + '\n');
   fs.writeFileSync(path.join(target, 'script.md'), fs.readFileSync(path.join(tpl, 'script.md'), 'utf8').replace('{{title}}', title));
   fs.writeFileSync(path.join(target, 'scenes.js'), fs.readFileSync(path.join(tpl, 'scenes.js'), 'utf8').replace(/\{\{title\}\}/g, title.replace(/'/g, "\\'")));
@@ -242,14 +300,23 @@ function init(dir, flags, print) {
 }
 
 async function preview(dir, flags, log) {
-  let project = loadProject(dir);
+  const size = textFlag(flags, 'size');
+  let project = loadProject(dir, { size });
   let { timeline } = await prepare(project, { log });
   let state = makeState(project, timeline);
   let lastError = null;
   const server = await startServer({ projectDir: project.dir, getState: () => (lastError ? { ...state, error: lastError } : state), port: num(flags.port, 'port') ?? 4400 });
   log(`preview: ${server.url}  (Ctrl+C to stop)`);
   const watched = ['video.json', 'script.md'];
-  const stamp = () => watched.map((f) => { try { return fs.statSync(path.join(project.dir, f)).mtimeMs; } catch { return 0; } }).join(':');
+  const stamp = () => {
+    const files = watched.map((f) => path.join(project.dir, f));
+    // Read the current path too, so creating a missing look file clears its error.
+    try {
+      const { theme } = JSON.parse(fs.readFileSync(files[0], 'utf8'));
+      if (typeof theme === 'string' && theme.endsWith('.json')) files.push(path.resolve(project.dir, theme));
+    } catch {}
+    return files.map((f) => { try { const st = fs.statSync(f); return `${f}:${st.mtimeMs}:${st.size}`; } catch { return `${f}:missing`; } }).join('|');
+  };
   let last = stamp();
   let busy = false;
   const timer = setInterval(async () => {
@@ -259,8 +326,8 @@ async function preview(dir, flags, log) {
     try {
       if (now !== last) {
         last = now;
-        log('script or settings changed, updating narration');
-        project = loadProject(project.dir);
+        log('script, settings or look changed, updating project');
+        project = loadProject(project.dir, { size });
         ({ timeline } = await prepare(project, { log }));
         lastError = null;
       }
@@ -284,15 +351,19 @@ async function preview(dir, flags, log) {
 
 async function say(text, flags, log, print) {
   if (!text) throw new ProjectError('usage: explainroo say "text to speak" [--voice af_heart] [--speed 1] [--pitch 0 (Hz, zh-TW voices)] [--out sample.wav]');
-  const voice = flags.voice || 'af_heart';
+  const voice = textFlag(flags, 'voice') || 'af_heart';
   if (!VOICES[voice]) throw new ProjectError(`voice "${voice}" does not exist. Run "explainroo voices".`);
+  const language = voiceLanguage(voice);
   const speed = num(flags.speed, 'speed') ?? 1;
-  const out = path.resolve(flags.out || `${voice.replace(/[^\w-]/g, '_')}.wav`);
+  const pitch = num(flags.pitch, 'pitch') ?? 0;
+  normalizeConfig({ voice, language, speed, pitch });
+  const out = path.resolve(textFlag(flags, 'out') || `${voice.replace(/[^\w-]/g, '_')}.wav`);
   if (isZhVoice(voice)) {
-    writeWav(out, (await zhSpeak(text, voice, speed, num(flags.pitch, 'pitch') ?? 0)).audio, TTS_SAMPLE_RATE);
+    writeWav(out, (await zhSpeak(text, voice, speed, pitch)).audio, TTS_SAMPLE_RATE);
   } else {
     const tts = await loadTTS({ log });
-    const audio = await tts.generate(text, { voice, speed });
+    const phonemes = language === 'en' ? undefined : (await phonemize([text], language))[0];
+    const audio = await generateSpeech(tts, text, { language, voice, speed, phonemes });
     writeWav(out, audio.audio, audio.sampling_rate || TTS_SAMPLE_RATE);
   }
   print(out, { file: out, voice });
@@ -323,7 +394,7 @@ function icons(words, print) {
     .filter((x) => x.score > 0)
     .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
     .slice(0, 40);
-  print(scored.map((x) => `${x.name.padEnd(28)} ${x.tags.slice(0, 6).join(', ')}`).join('\n') || 'no matches', { icons: scored.map((x) => x.name) });
+  print(scored.map((x) => `${x.name.padEnd(28)} ${x.tags.slice(0, 6).join(', ')}`).join('\n') || `no icons match "${words.join(' ')}"`, { icons: scored.map((x) => x.name) });
   return 0;
 }
 
@@ -336,6 +407,11 @@ async function doctor(flags, log, print) {
   add('node', nodeOk, `v${process.versions.node}${nodeOk ? '' : ' (need 20.11 or newer)'}`);
   const ff = ffmpegVersion();
   add('ffmpeg', !!ff, ff || 'not found; install ffmpeg or set EXPLAINROO_FFMPEG');
+  const espeak = espeakVersion();
+  add('espeak-ng', true, espeak || 'not found; only needed for Spanish, French, Italian, Portuguese and Hindi');
+  for (const [language, name] of [['ja', 'Japanese'], ['zh', 'Chinese']]) {
+    add(`misaki ${language}`, true, misakiAvailable(language) ? `Python with misaki for ${name}` : `not found; only needed for ${name}`);
+  }
   try {
     add('chrome', true, findChrome());
   } catch (e) {
@@ -344,12 +420,14 @@ async function doctor(flags, log, print) {
   const models = path.join(cacheRoot(), 'models', 'onnx-community');
   const has = (n) => fs.existsSync(path.join(models, n));
   if (flags.fetch) {
-    log('downloading speech models (about 400 MB the first time)');
+    log('downloading English speech models (about 400 MB the first time)');
+    log('other languages fetch their speech check model on first use, and Japanese and Chinese their fonts');
     await loadTTS({ log });
     await loadASR({ log });
   }
   add('voice model', has('Kokoro-82M-v1.0-ONNX'), has('Kokoro-82M-v1.0-ONNX') ? `Kokoro 82M (${ttsDtype()}) in ${models}` : 'not downloaded yet; "explainroo doctor --fetch" or the first voice run fetches it');
   add('speech check model', has('whisper-base.en_timestamped'), has('whisper-base.en_timestamped') ? 'Whisper base.en' : 'not downloaded yet; fetched on first use');
+  add('language model', has(MULTILINGUAL_ASR_MODEL.split('/')[1]), 'Whisper small for languages other than English; downloaded on first use, not by --fetch');
   try {
     add('zh-TW voices', true, `edge-tts through: ${edgeTTSCommand().slice(0, 6).join(' ')}`);
   } catch (e) {

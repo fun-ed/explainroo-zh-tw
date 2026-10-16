@@ -101,16 +101,17 @@ node bin/explainroo.js still videos/sync-zh steps@5
 | 檔案 | 我們改了什麼 | 衝突時怎麼處理 |
 |---|---|---|
 | `src/script.js` | `HAN`、`ZH_PIECE`、`SENTENCE_END`、`SUBTITLE_END`、`TRAILING_OFF` 常數；`normWord` 保留漢字；`tokenizeNarration` 逐字切中文、`[en:]` 單元、中文之間不加空格；`parseScript` 產生 `sent` 和 `subs`；`speechChunks` 中文不加空格、`……` 後停 0.5 秒；標點附著清單加了 `—～~⋯` | 最容易衝突。保留上游的新邏輯，再把這幾處加回去。`test/zh.test.js` 第一個測試會抓到漏掉的地方 |
-| `src/voice.js` | `PIPELINE` 版本號加 1；hash 包含 `pitch`；中文語音不用 Kokoro 和 Whisper；words 帶 `space` 和 `sent` | `PIPELINE` 取「上游值＋1」，讓語音快取重建 |
-| `src/models.js` | `VOICES` 合併 `ZH_VOICES` | 上游新增語音時，保留 `...ZH_VOICES` 這一行 |
-| `src/project.js` | zh 語音預設 `speed` 為 1；`pitch` 預設值和檢查 | 幾行，`DEFAULTS` 裡的 `pitch: 0` 別漏掉 |
-| `src/qa.js` | `check` 呼叫 `zhIssues`；`verify` 對中文語音跳過英文語音檢查 | 保留兩個 `isZhVoice` 判斷 |
-| `src/timeline.js` | words 帶 `space` 和 `sent`；scene 帶 `subs` | 只有兩行 |
-| `src/cli.js` | `init --lang zh-TW`、`say` 支援 zh 和 `--pitch`、`doctor` 檢查 edge-tts、`voices` 欄寬、HELP 文字 | 上游改 CLI 時重新套用 |
+| `src/voice.js` | `PIPELINE` 升版；hash 包含 `pitch`；台灣語音不用 Kokoro、misaki 和 Whisper；words 帶 `space` 和 `sent` | 保留上游 provider、phoneme 與錄音流程，只在台灣語音分支接回 `zhSpeak` 和 `alignChars`；升版讓快取重建 |
+| `src/models.js` | `VOICES` 合併 `ZH_VOICES`；`LANGUAGES` 新增 `zh-TW`；`voiceLanguage` 辨識台灣語音 | 保留上游 `zh` 與 `ja`，不可讓台灣語音進入上游 Kokoro 中文流程 |
+| `src/project.js` | 舊台灣語音設定自動推定 `language: "zh-TW"`；台灣語音預設 `speed` 為 1；`pitch` 預設值和檢查 | 保留上游 provider object 驗證；`isZhVoice` 必須能處理非字串 |
+| `src/qa.js` | `check` 呼叫 `zhIssues`；`verify` 對台灣語音跳過 Whisper 語音檢查 | 只略過台灣語音，上游 `zh` 和其他語言仍照上游檢查 |
+| `src/timeline.js` | words 帶 `space` 和 `sent`；scene 帶 `subs`；timeline 帶 `zh-TW` 語言 | 匯出字幕與 engine 都依賴語言欄位，不可只在 `ja` 和 `zh` 傳遞 |
+| `src/cli.js` | `init --lang zh-TW` 與 `--language zh-TW`、`say` 支援台灣語音和 `--pitch`、`doctor` 檢查 edge-tts、`voices` 顯示台灣語音、HELP 文字 | 同時保留上游 `--language`、provider 與輸出指令；不一致的兩個語言旗標應報錯 |
 | `engine/captions.js` | `visualLength`、`captionText`、雙語第二行、`gaps` | 上游改字幕繪製時要整段重新檢查 |
-| `engine/text.js` | `parseRich` 遇到漢字逐字切開；`layoutText` 中文字之間不加間距（`tight`） | |
-| `engine/util.js`、`engine/stage.js` | `normWord` 保留漢字；新增 `cueTokens`；`_cue` 改用它 | |
-| `engine/themes.js`、`engine/ui.js` | 字型 fallback 加上 `CJK_FONTS` | |
+| `engine/text.js` | `parseRich` 遇到漢字逐字切開；`layoutText` 中文字之間不加間距（`tight`），並把 `tight` 傳給 Stage | 打字動畫不可為緊接的字多扣一個空白 |
+| `engine/util.js`、`engine/stage.js` | `cueTokens` 保留舊介面；`_cue` 使用上游 CJK 比對並納入 `zh-TW` | 保留上游 `normWord` 的多語字元支援 |
+| `engine/themes.js`、`engine/ui.js`、`engine/runtime.js` | 字型 fallback 加上 `CJK_FONTS`；傳遞語言，僅 `zh-TW` 優先採用繁中字型 | 上游 `ja` 和 `zh` 的字型順序不變 |
+| `src/subtitles.js` | `zh-TW` 使用中文 SRT/VTT 分段與無逐字空白的格式 | 新語言分支別漏掉 `zh-TW`；不替台灣專案下載簡體中文字型 |
 | `AGENTS.md` | 「Traditional Chinese (Taiwan) videos」一整節，放在「Sizes for each platform」前面 | 保留上游內容，把整節貼回去 |
 | `README.md` | 整份改寫成 fork 的雙語 README | 一律保留我們的版本：`git checkout --ours README.md`。再看一下上游 README 的 diff，有新的安裝需求或指令就補進來 |
 

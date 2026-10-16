@@ -6,13 +6,15 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { parseScript } from './script.js';
-import { VOICES } from './models.js';
 import { isZhVoice } from './zhvoice.js';
+import { VOICES, LANGUAGES, voiceLanguage } from './models.js';
+import { THEMES as LOOKS } from '../engine/themes.js';
+import { parseColor } from '../engine/util.js';
 
-export const THEMES = ['paper', 'clean', 'chalk', 'blueprint', 'midnight'];
+export const THEMES = Object.keys(LOOKS);
 export const MUSIC_STYLES = ['warm', 'upbeat', 'calm', 'tech', 'playful'];
 export const TRANSITIONS = ['auto', 'fade', 'slide', 'wipe', 'zoom', 'brush', 'cut'];
-export const THEME_MUSIC = { paper: 'warm', clean: 'upbeat', chalk: 'calm', blueprint: 'tech', midnight: 'tech' };
+export const THEME_MUSIC = Object.fromEntries(THEMES.map((name) => [name, LOOKS[name].music]));
 const ASPECTS = { '16:9': [1920, 1080], '9:16': [1080, 1920], '1:1': [1080, 1080], '4:5': [1080, 1350] };
 
 // Named formats for the usual places a video goes. Vertical apps draw their
@@ -35,6 +37,7 @@ export const DEFAULTS = {
   theme: 'paper',
   size: '16:9',
   fps: 30,
+  language: 'en',
   voice: 'af_heart',
   speed: 0.9,
   pitch: 0,
@@ -42,7 +45,10 @@ export const DEFAULTS = {
   music: true,
   sfx: true,
   captions: 'auto',
+  cover: 'auto',
   transition: 'auto',
+  camera: 'auto',
+  motionBlur: true,
   lead: 0.35,
   hold: 0.7,
   end: 1.4,
@@ -70,6 +76,81 @@ function fail(msg) {
   throw new ProjectError(msg);
 }
 
+const LOOK_KEYS = ['extends', 'name', 'dark', 'bg', 'ink', 'muted', 'surface', 'accent', 'colors', 'fonts', 'background', 'stroke', 'radius', 'transition', 'music', 'code', 'terminal', 'caption'];
+const TEXTURES = ['paper', 'dots', 'chalk', 'grid', 'glow', 'plain'];
+const BUILTIN_FONTS = [...new Set(JSON.parse(fs.readFileSync(new URL('../fonts/fonts.json', import.meta.url), 'utf8')).map((f) => f.family))];
+
+function lookPath(theme) {
+  return typeof theme === 'string' && theme.endsWith('.json') && !path.isAbsolute(theme) && !path.win32.isAbsolute(theme);
+}
+
+export function loadLook(dir, file, fonts = []) {
+  const bad = (key, message) => fail(`${file}: ${key} ${message}`);
+  let raw;
+  try {
+    raw = JSON.parse(fs.readFileSync(path.resolve(dir, file), 'utf8'));
+  } catch (e) {
+    if (e.code === 'ENOENT') bad('theme', 'file is missing. Check the path in video.json.');
+    bad('theme', `file could not be read as JSON: ${e.message}`);
+  }
+  const object = (value, key, keys) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) bad(key, 'must be an object');
+    for (const k of Object.keys(value)) if (!keys.includes(k)) bad(`${key}.${k}`, `is unknown. Known: ${keys.join(', ')}`);
+  };
+  const oneOf = (value, key, values) => {
+    if (!values.includes(value)) bad(key, `must be one of ${values.join(', ')}`);
+  };
+  const number = (value, key, min, max) => {
+    if (!(typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max)) bad(key, `must be a number between ${min} and ${max}`);
+  };
+  const color = (value, key, alpha = false) => {
+    const p = typeof value === 'string' && /^rgba\(\s*\d+(?:\.\d+)?\s*,\s*\d+(?:\.\d+)?\s*,\s*\d+(?:\.\d+)?\s*,\s*(?:\d+(?:\.\d+)?|\.\d+)\s*\)$/.test(value) ? parseColor(value) : null;
+    if (!(typeof value === 'string' && HEX.test(value)) && !(alpha && p && [p.r, p.g, p.b].every((v) => v <= 255) && p.a <= 1)) {
+      bad(key, `must be a color like "#2563eb"${alpha ? ' or "rgba(17,24,39,0.82)"' : ''}`);
+    }
+  };
+  object(raw, 'look', LOOK_KEYS);
+  oneOf(raw.extends, 'extends', THEMES);
+  const name = raw.name === undefined ? path.basename(file, '.json') : raw.name;
+  if (!(typeof name === 'string' && name.trim()) || THEMES.includes(name)) bad('name', 'must be a non-empty name that is not a built-in look');
+  if (raw.dark !== undefined && typeof raw.dark !== 'boolean') bad('dark', 'must be true or false');
+  for (const k of ['bg', 'ink', 'muted', 'surface']) if (raw[k] !== undefined) color(raw[k], k);
+  if (raw.accent !== undefined) oneOf(raw.accent, 'accent', Object.keys(LOOKS.paper.colors));
+  if (raw.background !== undefined) oneOf(raw.background, 'background', TEXTURES);
+  if (raw.transition !== undefined) oneOf(raw.transition, 'transition', TRANSITIONS.filter((v) => v !== 'auto'));
+  if (raw.music !== undefined) oneOf(raw.music, 'music', MUSIC_STYLES);
+  if (raw.radius !== undefined) number(raw.radius, 'radius', 0, 200);
+  for (const group of ['colors', 'code', 'terminal', 'caption']) {
+    if (raw[group] === undefined) continue;
+    const base = LOOKS[raw.extends][group];
+    object(raw[group], group, Object.keys(base));
+    for (const [k, v] of Object.entries(raw[group])) color(v, `${group}.${k}`, String(base[k]).startsWith('rgba('));
+  }
+  if (raw.fonts !== undefined) {
+    object(raw.fonts, 'fonts', Object.keys(LOOKS.paper.fonts));
+    for (const [role, f] of Object.entries(raw.fonts)) {
+      const key = `fonts.${role}`;
+      object(f, key, ['family', 'weight']);
+      if (f.family !== undefined && ![...BUILTIN_FONTS, ...fonts.map((v) => v.family)].includes(f.family)) bad(`${key}.family`, `must be listed in video.json fonts or be built in. Built-in families: ${BUILTIN_FONTS.join(', ')}`);
+      if (f.weight !== undefined) {
+        number(f.weight, `${key}.weight`, 1, 1000);
+        if (!Number.isInteger(f.weight)) bad(`${key}.weight`, 'must be a whole number');
+      }
+    }
+  }
+  if (raw.stroke !== undefined) {
+    const ranges = { width: [0, 20], roughness: [0, 5], bowing: [0, 5], hachureGap: [1, 100], fillWeight: [0, 20], glow: [0, 100] };
+    object(raw.stroke, 'stroke', ['rough', ...Object.keys(ranges), 'fillStyle', 'texture']);
+    for (const [k, v] of Object.entries(raw.stroke)) {
+      if (ranges[k]) number(v, `stroke.${k}`, ...ranges[k]);
+      else if (k === 'rough' && typeof v !== 'boolean') bad('stroke.rough', 'must be true or false');
+      else if (k === 'fillStyle') oneOf(v, 'stroke.fillStyle', ['solid', 'hachure', 'cross-hatch', 'zigzag', 'dots']);
+      else if (k === 'texture') oneOf(v, 'stroke.texture', ['chalk']);
+    }
+  }
+  return { ...raw, name };
+}
+
 export function resolveSize(size) {
   if (FORMATS[size]) return { width: FORMATS[size].size[0], height: FORMATS[size].size[1], safe: FORMATS[size].safe || null };
   if (ASPECTS[size]) return { width: ASPECTS[size][0], height: ASPECTS[size][1] };
@@ -81,23 +162,56 @@ export function resolveSize(size) {
   return { width, height };
 }
 
-export function normalizeConfig(raw) {
+export function normalizeConfig(raw, dir = '.') {
   const cfg = { ...DEFAULTS, ...raw };
+  if (typeof cfg.language !== 'string' || !Object.hasOwn(LANGUAGES, cfg.language)) fail(`language must be one of ${Object.keys(LANGUAGES).join(', ')}`);
+  if (raw.voice === undefined) cfg.voice = LANGUAGES[cfg.language];
   const unknown = Object.keys(raw).filter((k) => !(k in DEFAULTS) && !k.startsWith('_'));
   if (unknown.length) fail(`video.json has unknown setting(s): ${unknown.join(', ')}. Known: ${Object.keys(DEFAULTS).join(', ')}`);
-  if (!THEMES.includes(cfg.theme)) fail(`theme must be one of ${THEMES.join(', ')}, not "${cfg.theme}"`);
-  if (!VOICES[cfg.voice]) fail(`voice "${cfg.voice}" does not exist. Run "explainroo voices" for the list.`);
-  // Edge and macOS voices speak at a natural pace at 1; Kokoro's default is 0.9.
-  if (isZhVoice(cfg.voice) && raw.speed === undefined) cfg.speed = 1;
+  if (!THEMES.includes(cfg.theme) && !lookPath(cfg.theme)) fail(`theme must be one of ${THEMES.join(', ')} or a relative path to a .json look file, not "${cfg.theme}"`);
+  if (typeof cfg.voice === 'object') {
+    const v = cfg.voice;
+    if (!v || Array.isArray(v)) fail('voice must be a Kokoro id or an object with provider');
+    const keys = { kokoro: ['provider', 'id'], elevenlabs: ['provider', 'id', 'model'], recording: ['provider', 'src'] };
+    if (typeof v.provider !== 'string' || !Object.hasOwn(keys, v.provider)) fail('voice.provider must be kokoro, elevenlabs or recording');
+    const extra = Object.keys(v).filter((k) => !keys[v.provider].includes(k));
+    if (extra.length) fail(`voice has unknown setting(s): ${extra.join(', ')}. Known: ${keys[v.provider].join(', ')}`);
+    if (v.provider === 'recording') {
+      if (!(typeof v.src === 'string' && /^assets\/.+/.test(v.src) && !v.src.split('/').includes('..') && !v.src.includes('\\'))) {
+        fail('voice.src must be a file or folder inside assets/, with no ..');
+      }
+    } else if (!(typeof v.id === 'string' && v.id.trim())) fail('voice.id is required');
+    if (v.provider === 'kokoro') cfg.voice = v.id;
+    if (v.provider === 'elevenlabs') {
+      if (v.model !== undefined && !(typeof v.model === 'string' && v.model.trim())) fail('voice.model must be an ElevenLabs model id');
+      cfg.voice = { ...v, model: v.model ?? 'eleven_multilingual_v2' };
+    }
+  }
+  if (typeof cfg.voice === 'string') {
+    if (raw.language === undefined && isZhVoice(cfg.voice)) cfg.language = 'zh-TW';
+    if (!Object.hasOwn(VOICES, cfg.voice)) fail(`voice "${cfg.voice}" does not exist. Run "explainroo voices" for the list.`);
+    if (voiceLanguage(cfg.voice) !== cfg.language) fail(`voice "${cfg.voice}" does not speak ${cfg.language}. Use ${Object.keys(VOICES).filter(id => voiceLanguage(id) === cfg.language).join(', ')}.`);
+  } else if (!cfg.voice || typeof cfg.voice !== 'object') fail('voice must be a Kokoro id or an object with provider');
+  if ((typeof cfg.voice !== 'string' || isZhVoice(cfg.voice)) && raw.speed === undefined) cfg.speed = 1;
   if (!(cfg.speed >= 0.6 && cfg.speed <= 1.6)) fail('speed must be between 0.6 and 1.6');
   if (!(Number.isInteger(cfg.pitch) && cfg.pitch >= -50 && cfg.pitch <= 50)) fail('pitch must be a whole number of Hz between -50 and 50 (0 is the voice as it is)');
   if (cfg.pitch && !isZhVoice(cfg.voice)) fail('pitch only works with the zh-TW voices (Edge and macOS); Kokoro voices have no pitch setting');
   if (!(cfg.pace >= 0.7 && cfg.pace <= 1.6)) fail('pace must be between 0.7 and 1.6 (1 is normal, 1.3 is 30% faster)');
-  if (cfg.speed * cfg.pace > 1.8) fail(`speed ${cfg.speed} times pace ${cfg.pace} makes the voice too fast; keep speed x pace at 1.8 or below`);
+  if (typeof cfg.voice === 'string' && cfg.speed * cfg.pace > 1.8) fail(`speed ${cfg.speed} times pace ${cfg.pace} makes the voice too fast; keep speed x pace at 1.8 or below`);
   if (![24, 25, 30, 50, 60].includes(cfg.fps)) fail('fps must be 24, 25, 30, 50 or 60');
   if (!TRANSITIONS.includes(cfg.transition)) fail(`transition must be one of ${TRANSITIONS.join(', ')}`);
+  if (!['auto', 'still'].includes(cfg.camera)) fail('camera must be "auto" (the camera follows the narration) or "still"');
+  if (typeof cfg.motionBlur !== 'boolean') fail('motionBlur must be true or false');
   if (![true, false, 'minimal'].includes(cfg.sfx)) fail('sfx must be true, false or "minimal"');
   if (![true, false, 'auto'].includes(cfg.captions)) fail('captions must be true, false or "auto"');
+  const cover = cfg.cover;
+  const [scene, at, extra] = typeof cover === 'string' ? cover.split('@') : [];
+  const coverTime = typeof cover === 'number' && Number.isFinite(cover) && cover >= 0;
+  const coverSpec = typeof cover === 'string' && (/^\d+(\.\d+)?$/.test(cover) || (
+    /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(scene) && extra === undefined &&
+    (at === undefined || at === '' || at === 'end' || at === 'start' || Number.isFinite(Number(at)))
+  ));
+  if (!coverTime && !coverSpec) fail('cover must be "auto", seconds like 12.5, or a still spec like "intro@end"');
   for (const k of ['lead', 'hold', 'end', 'sentenceGap', 'paragraphGap']) {
     if (!(typeof cfg[k] === 'number' && cfg[k] >= 0 && cfg[k] <= 10)) fail(`${k} must be a number of seconds between 0 and 10`);
   }
@@ -150,8 +264,9 @@ export function normalizeConfig(raw) {
     if (f.style !== undefined && !['normal', 'italic'].includes(f.style)) fail(`${where}.style must be "normal" or "italic"`);
   });
 
+  if (lookPath(cfg.theme)) cfg.look = loadLook(dir, cfg.theme, cfg.fonts);
   let music = cfg.music;
-  if (music === true) music = { style: THEME_MUSIC[cfg.theme] };
+  if (music === true) music = { style: cfg.look ? (cfg.look.music ?? THEME_MUSIC[cfg.look.extends]) : THEME_MUSIC[cfg.theme] };
   else if (typeof music === 'string') music = { style: music };
   if (music) {
     // A faster pace plays the music a little faster too.
@@ -174,10 +289,10 @@ export function findProjectDir(arg) {
   const dir = path.resolve(arg || '.');
   if (fs.existsSync(path.join(dir, 'video.json'))) return dir;
   if (arg) fail(`${dir} is not a video project (no video.json). Create one with "explainroo init ${arg}".`);
-  fail('no video.json here. Pass the project folder, for example "explainroo render videos/my-video".');
+  fail('no video.json here. Run the command in a video folder or pass the project folder, for example "explainroo <command> videos/my-video".');
 }
 
-export function loadProject(arg) {
+export function loadProject(arg, { size } = {}) {
   const dir = findProjectDir(arg);
   let raw;
   try {
@@ -185,19 +300,24 @@ export function loadProject(arg) {
   } catch (e) {
     fail(`video.json is not valid JSON: ${e.message}`);
   }
-  const config = normalizeConfig(raw);
+  const config = normalizeConfig(size === undefined ? raw : { ...raw, size }, dir);
   for (const f of [...config.fonts.map((x) => x.src), ...(config.brand?.logo ? [config.brand.logo] : [])]) {
     if (!fs.existsSync(path.join(dir, f))) fail(`${f} is listed in video.json but the file is missing`);
   }
   const scriptPath = path.join(dir, 'script.md');
   if (!fs.existsSync(scriptPath)) fail(`${scriptPath} is missing`);
-  const script = parseScript(fs.readFileSync(scriptPath, 'utf8'));
+  const script = parseScript(fs.readFileSync(scriptPath, 'utf8'), { language: config.language });
   if (!config.title) config.title = script.title || path.basename(dir);
   const scenesPath = path.join(dir, 'scenes.js');
   if (!fs.existsSync(scenesPath)) fail(`${scenesPath} is missing`);
   const build = path.join(dir, 'build');
   const out = path.join(dir, 'out');
-  return { dir, config, script, paths: { build, out, voice: path.join(build, 'voice'), scenes: scenesPath, script: scriptPath } };
+  return { dir, config, script, sizeOverride: size, paths: { build, out, voice: path.join(build, 'voice'), scenes: scenesPath, script: scriptPath, look: config.look ? path.resolve(dir, config.theme) : null } };
+}
+
+export function outputPath(project, name, ext = '', out = null) {
+  const suffix = project.sizeOverride === undefined ? '' : `-${project.sizeOverride.replace(':', '-')}`;
+  return path.resolve(out || path.join(project.paths.out, `${name}${suffix}${ext}`));
 }
 
 export function listAssets(dir) {

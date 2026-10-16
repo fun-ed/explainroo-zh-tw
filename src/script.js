@@ -10,9 +10,9 @@ const ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 const HAN = /\p{Script=Han}/u;
 // A Han character (with the punctuation around it) is one word; other runs stay whole.
 const ZH_PIECE = /[「『（《〈“‘]*\p{Script=Han}|[^\p{Script=Han}「『（《〈“‘]+|[「『（《〈“‘]+$/gu;
-const SENTENCE_END = /[.!?…。！？]["'’)\]」』）”]*$/;
+const SENTENCE_END = /[.!?…。！？।]["'’)\]」』）”]*$/;
 // An [en: ...] subtitle belongs to a whole sentence, so a "……" inside one does not end it.
-const SUBTITLE_END = /[.!?。！？]["'’)\]」』）”]*$/;
+const SUBTITLE_END = /[.!?।。！？]["'’)\]」』）”]*$/;
 // Edge barely pauses at a Chinese "……" (0.13 s measured, less than a comma), but a
 // Taiwanese speaker trails off there, so the narration gets a real pause.
 // ponytail: fixed 0.5 s; make it a setting if videos need a different beat.
@@ -33,18 +33,25 @@ export function normWord(w) {
     .normalize('NFKD')
     .replace(/[̀-ͯ]/g, '')
     .replace(/['’]/g, '')
-    .replace(/[^a-z0-9%$€£+#@.\p{Script=Han}]/gu, '')
+    .replace(/[^\p{L}\p{M}\p{N}%$€£+#@.]/gu, '')
     .replace(/^\.+|\.+$/g, '');
 }
 
 function parseAttrs(src, line) {
   const attrs = {};
   if (!src) return attrs;
-  for (const part of src.trim().split(/[\s,]+/).filter(Boolean)) {
+  const token = /[^\s,=:]+[=:](?:"[^"]*"|'[^']*'|[^\s,]+)|[^\s,]+/y;
+  let i = 0;
+  while (i < src.length) {
+    if (/[\s,]/.test(src[i])) { i++; continue; }
+    token.lastIndex = i;
+    const part = token.exec(src)?.[0];
+    i = token.lastIndex;
     const m = /^([a-zA-Z][\w-]*)\s*[=:]\s*(.+)$/.exec(part);
     if (!m) throw new ScriptError(`cannot read scene attribute "${part}" (use key=value)`, line);
     const [, key, raw] = m;
     const value = raw.replace(/^["']|["']$/g, '');
+    if (key === 'chapter' && (!value.trim() || value.length > 60)) throw new ScriptError('chapter title must be 1 to 60 characters', line);
     if (ATTR_NUMBERS.has(key)) {
       const n = Number(value);
       if (!Number.isFinite(n) || n < 0) throw new ScriptError(`attribute ${key} must be a number >= 0`, line);
@@ -58,21 +65,23 @@ function parseAttrs(src, line) {
 
 // Splits one scene's narration into units. A unit is a word (or an override
 // group) with separate display and spoken text, a marker, or a pause.
-export function tokenizeNarration(text, line = 0) {
+export function tokenizeNarration(text, line = 0, language = 'en') {
   const units = [];
+  const segmenter = ['ja', 'zh'].includes(language) ? new Intl.Segmenter(language, { granularity: 'word' }) : null;
+  const punctuation = /^[.,;:!?।。！？、，；：）」』)\]"'’”…〉》—～~⋯]+$/u;
   let i = 0;
   let pendingSpace = false;
   const n = text.length;
   const pushWord = (display, spoken) => {
     const prev = units[units.length - 1];
-    if (!pendingSpace && prev && prev.type === 'word' && /^[.,;:!?)\]"'’…，。！？、；：」』）》〉”—～~⋯]+$/.test(display)) {
+    if (!pendingSpace && prev && prev.type === 'word' && punctuation.test(display)) {
       prev.display += display;
       prev.spoken += spoken;
       return;
     }
     // Spaces between Chinese characters (around a [#mark], say) are not real gaps.
     const lastWord = units.findLast((u) => u.type === 'word');
-    const cjkJoin = lastWord && HAN.test(display[0]) && /[\p{Script=Han}，。！？、；：」』）》]$/u.test(lastWord.display);
+    const cjkJoin = language === 'zh-TW' && lastWord && HAN.test(display[0]) && /[\p{Script=Han}，。！？、；：」』）》]$/u.test(lastWord.display);
     units.push({ type: 'word', display, spoken, space: cjkJoin ? false : pendingSpace || !lastWord });
     pendingSpace = false;
   };
@@ -115,7 +124,7 @@ export function tokenizeNarration(text, line = 0) {
         throw new ScriptError('pronunciation overrides look like {shown|spoken}, for example {SQL|sequel}', line);
       }
       let j = end + 1;
-      while (j < n && !/\s/.test(text[j]) && text[j] !== '[' && text[j] !== '{' && !HAN.test(text[j])) j++;
+      while (j < n && !/\s/.test(text[j]) && text[j] !== '[' && text[j] !== '{' && (language === 'zh-TW' ? !HAN.test(text[j]) : (!segmenter || punctuation.test(text[j])))) j++;
       const trail = text.slice(end + 1, j);
       pushWord(inner.slice(0, bar).trim() + trail, inner.slice(bar + 1).trim() + trail);
       i = j;
@@ -124,14 +133,23 @@ export function tokenizeNarration(text, line = 0) {
     let j = i;
     while (j < n && !/\s/.test(text[j]) && !text.startsWith('[#', j) && !text.startsWith('[pause', j) && !text.startsWith('[en:', j) && text[j] !== '{') j++;
     const word = text.slice(i, j);
-    if (HAN.test(word)) for (const piece of word.match(ZH_PIECE)) pushWord(piece, piece);
-    else pushWord(word, word);
+    if (language === 'zh-TW' && HAN.test(word)) {
+      for (const piece of word.match(ZH_PIECE)) pushWord(piece, piece);
+    } else if (segmenter) {
+      let prefix = '';
+      for (const part of segmenter.segment(word)) {
+        if (!part.isWordLike && (/[「『（“‘(]/u.test(part.segment) || !units.some(u => u.type === 'word'))) { prefix += part.segment; continue; }
+        pushWord(prefix + part.segment, prefix + part.segment);
+        prefix = '';
+      }
+      if (prefix) pushWord(prefix, prefix);
+    } else pushWord(word, word);
     i = j;
   }
   return units;
 }
 
-export function parseScript(source) {
+export function parseScript(source, { language = 'en' } = {}) {
   const lines = String(source).replace(/\r\n?/g, '\n').split('\n');
   let title = null;
   const scenes = [];
@@ -201,7 +219,7 @@ export function parseScript(source) {
       const units = [];
       s._paras.forEach((p, pi) => {
         if (pi > 0) units.push({ type: 'pause', sec: null, paragraph: true });
-        units.push(...tokenizeNarration(p.text, p.line));
+        units.push(...tokenizeNarration(p.text, p.line, language));
       });
       const words = units.filter((u) => u.type === 'word');
       // Number the sentences; an [en: ...] belongs to the sentence before it.
@@ -232,7 +250,9 @@ export function parseScript(source) {
 // the text between explicit pauses) and is sent to the TTS model on its own,
 // which keeps every request well under the model's context limit and gives
 // exact control over the silence between sentences.
-export function speechChunks(units, { sentenceGap = 0.3, paragraphGap = 0.55, pace = 1 } = {}) {
+export function speechChunks(units, { sentenceGap = 0.3, paragraphGap = 0.55, pace = 1, language = 'en' } = {}) {
+  const cjk = ['ja', 'zh'].includes(language);
+  const sentenceEnd = cjk || language === 'zh-TW' ? SENTENCE_END : /[.!?…।]["'’)\]」』）”]*$/;
   const chunks = [];
   let cur = null;
   let gapBefore = 0;
@@ -251,12 +271,11 @@ export function speechChunks(units, { sentenceGap = 0.3, paragraphGap = 0.55, pa
       cur = { gapBefore, words: [], text: '' };
       gapBefore = 0;
     }
-    // Chinese characters are joined without spaces.
-    const prev = cur.words[cur.words.length - 1];
-    const tight = prev && !u.space && (HAN.test(u.spoken[0]) || HAN.test(prev.spoken.slice(-1)) || /^[，。！？、；：」』）》]/.test(u.spoken));
-    cur.text += (cur.words.length && !tight ? ' ' : '') + u.spoken;
+    const prev = cur.words.at(-1);
+    const tight = language === 'zh-TW' && prev && !u.space && (HAN.test(u.spoken[0]) || HAN.test(prev.spoken.slice(-1)) || /^[，。！？、；：」』）》]/.test(u.spoken));
+    cur.text += (cur.words.length && !cjk && !tight ? ' ' : '') + u.spoken;
     cur.words.push({ unitIndex: index, display: u.display, spoken: u.spoken });
-    if (SENTENCE_END.test(u.spoken)) {
+    if (sentenceEnd.test(u.spoken)) {
       close();
       gapBefore = (TRAILING_OFF.test(u.spoken) ? Math.max(sentenceGap, TRAILING_OFF_GAP) : sentenceGap) / pace;
     }

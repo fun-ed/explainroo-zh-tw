@@ -2,13 +2,14 @@
 // draws the whole frame from scratch as a function of the scene time `s.t`.
 // Elements take `at` (when they appear) and optional `out` (when they leave);
 // the theme decides how they enter, and entering elements add sound effects.
-import { clamp, lerp, ease, easeFn, rand01, noise1, hashStr, mulberry32, suggest, normWord, cueTokens, withAlpha, contrast, mixColor, opaque } from './util.js';
+import { clamp, lerp, ease, easeFn, rand01, noise1, hashStr, mulberry32, suggest, normWord, withAlpha, contrast, mixColor, opaque } from './util.js';
 import { colorOf, tintOf, fontString } from './themes.js';
-import { scalePath, quadD, polyD, pathLength, pointAt } from './pathdata.js';
+import { scalePath, quadD, polyD, pathLength, pointAt, parsePath, absolutize } from './pathdata.js';
 import { layoutText, lineStartX } from './text.js';
-import { highlightLine } from './code.js';
+import { clipFrame, clipURL } from './clips.js';
+import { highlightLine, codeTokens, matchTokens, resolveCodeSteps, codeMorphState } from './code.js';
 
-const DEFAULT_DUR = { draw: 0.9, write: 0.8, pop: 0.45, rise: 0.55, fade: 0.5, zoom: 0.6, drop: 0.55, grow: 1.0, none: 0.001, 'slide-left': 0.55, 'slide-right': 0.55, 'slide-up': 0.55, 'slide-down': 0.55 };
+const DEFAULT_DUR = { draw: 0.9, write: 0.8, pop: 0.6, rise: 0.75, fade: 0.6, zoom: 0.75, drop: 0.75, grow: 1.0, none: 0.001, 'slide-left': 0.75, 'slide-right': 0.75, 'slide-up': 0.75, 'slide-down': 0.75 };
 const ENTERS = ['draw', 'write', 'type', 'words', 'sync', 'pop', 'rise', 'fade', 'zoom', 'drop', 'grow', 'none', 'slide-left', 'slide-right', 'slide-up', 'slide-down'];
 const EXITS = ['fade', 'pop', 'rise', 'drop', 'slide-left', 'slide-right', 'none'];
 const BOLD = { display: undefined, body: 600, hand: undefined, mono: 700 };
@@ -24,6 +25,7 @@ export class Stage {
     this.pen = engine.pen;
     this.W = engine.W;
     this.H = engine.H;
+    this.portrait = this.H > this.W;
     // Platform formats (tiktok, reels, shorts...) keep content inside the part
     // of the frame the app leaves free, so the center moves with it.
     this.safe = engine.safeArea;
@@ -79,7 +81,9 @@ export class Stage {
   }
 
   _cue(word, n) {
-    const want = cueTokens(word).map(normWord).filter(Boolean);
+    const language = this.engine.config.language;
+    const cjk = ['ja', 'zh', 'zh-TW'].includes(language);
+    const want = (cjk ? [String(word)] : String(word).split(/\s+/)).map(normWord).filter(Boolean);
     if (!want.length) throw new SceneError(`cue("${word}") is empty`);
     const ws = this.words;
     if (!ws.length) throw new SceneError(`cue("${word}"): scene "${this.id}" has no narration`);
@@ -88,8 +92,15 @@ export class Stage {
     let found = null;
     for (let i = 0; i + want.length <= norms.length; i++) {
       let ok = true;
-      for (let k = 0; k < want.length; k++) if (norms[i + k] !== want[k]) { ok = false; break; }
-      if (ok && ++seen === n && !found) found = { start: ws[i].start, end: ws[i + want.length - 1].end };
+      let end = i + want.length;
+      if (cjk) {
+        let phrase = norms[i];
+        while (phrase.length < want[0].length && end < norms.length) phrase += norms[end++];
+        ok = phrase === want[0];
+      } else {
+        for (let k = 0; k < want.length; k++) if (norms[i + k] !== want[k]) { ok = false; break; }
+      }
+      if (ok && ++seen === n && !found) found = { start: ws[i].start, end: ws[end - 1].end };
     }
     if (found) {
       // A word spoken more than once silently means its first time; tell the check.
@@ -210,6 +221,19 @@ export class Stage {
     const base = o.dur ?? extra.dur ?? DEFAULT_DUR[enter] ?? 0.6;
     const dur = extra.real ? base : base / this.pace;
     this._record(kind, at, dur, o, extra);
+    if (this.engine.layoutLog && this._pendingBox) {
+      // The element's own scale and rotation, and parts drawn beside it
+      // (an icon's label), count for the camera.
+      let box = this._pendingBox;
+      const sc = o.scale ?? 1;
+      const rad = ((o.rotate ?? 0) * Math.PI) / 180;
+      if (sc !== 1 || rad) box = { ...box, w: (Math.abs(box.w * Math.cos(rad)) + Math.abs(box.h * Math.sin(rad))) * sc, h: (Math.abs(box.w * Math.sin(rad)) + Math.abs(box.h * Math.cos(rad))) * sc };
+      // _pendingExtra is already measured with the element's transform.
+      if (this._pendingExtra) box = unionBox(box, this._pendingExtra);
+      this._attach(kind, at, out, box);
+      this._pendingBox = null;
+      this._pendingExtra = null;
+    }
     if (this._suppress > 0) return null;
     if (this.t < at) return null;
     let q = 0;
@@ -217,7 +241,9 @@ export class Stage {
       q = clamp((this.t - out) / ((o.outDur ?? 0.45) / this.pace));
       if (q >= 1 || o.exit === 'none') return null;
     }
-    return { p: clamp((this.t - at) / dur), q, at, dur, enter, exit: o.exit ?? 'fade', local: this.t - at };
+    const p = clamp((this.t - at) / dur);
+    if ((p < 1 && enter !== 'none') || (q > 0 && q < 1)) this.engine.moving = true;
+    return { p, q, at, dur, enter, exit: o.exit ?? 'fade', local: this.t - at };
   }
 
   _record(kind, at, dur, o, extra = {}) {
@@ -229,37 +255,53 @@ export class Stage {
     rec.push({ kind, at, dur, sfx: sfx || null, gain: o.sfxGain ?? extra.gain ?? 1, pitch: extra.pitch, sustain: extra.sustain, key: `${kind}|${Math.round(at * 1000)}|${o.id ?? extra.label ?? ''}|${extra.pitch ?? ''}` });
   }
 
+  // Entrances move on a spring: they go a little past their place and settle
+  // back. They fade in quickly.
+  // `lift` is 1 while an element is arriving and 0 once it has landed;
+  // shadows use it to rise and settle.
   _enterTransform(life) {
     const p = life.p;
     const E = ease.out(p);
+    const S = ease.spring(p);
+    const A = ease.out(clamp(p * 1.8));
     let a = 1;
     let s = 1;
     let dx = 0;
     let dy = 0;
+    let lift = 0;
     switch (life.enter) {
-      case 'fade': a = E; break;
-      case 'pop': s = lerp(0.55, 1, ease.outBack(p)); a = clamp(p * 3); break;
-      case 'rise': dy = (1 - E) * 36; a = E; break;
-      case 'drop': dy = -(1 - ease.outBack(p)) * 48; a = clamp(p * 2.5); break;
-      case 'zoom': s = lerp(1.35, 1, E); a = E; break;
-      case 'slide-left': dx = (1 - E) * 150; a = E; break;
-      case 'slide-right': dx = -(1 - E) * 150; a = E; break;
-      case 'slide-up': dy = (1 - E) * 150; a = E; break;
-      case 'slide-down': dy = -(1 - E) * 150; a = E; break;
+      case 'fade': a = E; s = lerp(0.975, 1, S); break;
+      case 'pop': s = lerp(0.6, 1, S); a = clamp(p * 3); lift = 1 - E; break;
+      case 'rise': dy = (1 - S) * 44; s = lerp(0.965, 1, S); a = A; lift = 1 - E; break;
+      case 'drop': dy = -(1 - S) * 60; a = clamp(p * 2.5); lift = 1 - E; break;
+      case 'zoom': s = lerp(1.3, 1, S); a = A; break;
+      case 'slide-left': dx = (1 - S) * 170; a = A; break;
+      case 'slide-right': dx = -(1 - S) * 170; a = A; break;
+      case 'slide-up': dy = (1 - S) * 170; a = A; break;
+      case 'slide-down': dy = -(1 - S) * 170; a = A; break;
       default: break;
     }
     if (life.q > 0) {
       const Q = ease.in(life.q);
       switch (life.exit) {
         case 'pop': s *= 1 - 0.45 * Q; a *= 1 - Q; break;
-        case 'rise': dy -= Q * 40; a *= 1 - Q; break;
+        case 'rise': dy -= Q * 40; s *= 1 - 0.03 * Q; a *= 1 - Q; break;
         case 'drop': dy += Q * 60; a *= 1 - Q; break;
         case 'slide-left': dx -= Q * 170; a *= 1 - Q; break;
         case 'slide-right': dx += Q * 170; a *= 1 - Q; break;
-        default: a *= 1 - Q;
+        default: s *= 1 - 0.03 * Q; a *= 1 - Q;
       }
     }
-    return { a, s, dx, dy };
+    return { a, s, dx, dy, lift };
+  }
+
+  // The look's shadow (or `fallback`), raised while the element drawn last
+  // is still arriving.
+  _shadow(tr = this._lastTr, fallback = null) {
+    const sh = this.theme.shadow || fallback;
+    if (!sh || !tr || !tr.lift) return sh;
+    const k = tr.lift;
+    return { ...sh, blur: sh.blur * (1 + 1.4 * k), y: (sh.y || 0) * (1 + 2 * k) };
   }
 
   _push(x, y, life, o) {
@@ -278,6 +320,7 @@ export class Stage {
     const sc = (o.scale ?? 1) * tr.s;
     if (sc !== 1) ctx.scale(sc, sc);
     ctx.globalAlpha *= tr.a * (o.opacity ?? 1);
+    this._lastTr = tr;
     return tr;
   }
 
@@ -301,7 +344,46 @@ export class Stage {
     const ys = pts.map((p) => p.y);
     const box = { x: (Math.min(...xs) + Math.max(...xs)) / 2, y: (Math.min(...ys) + Math.max(...ys)) / 2, w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys), shape };
     if (id !== undefined && id !== null) this._ids.set(String(id), box);
+    // While the camera is planned, the next _life call gives this box its
+    // timing.
+    if (this.engine.layoutLog) this._pendingBox = box;
     return box;
+  }
+
+  // Records an element's place and timing for the automatic camera. x, y is
+  // the center in local coordinates.
+  _logLayout(kind, at, out, x, y, w, h) {
+    if (!this.engine.layoutLog) return;
+    this._attach(kind, at, out, this._designBox(x, y, w, h));
+  }
+
+  // A box inside an element drawn at (ax, ay), in scene coordinates, with
+  // the element's own scale and rotation, as _push draws it.
+  _elementBox(o, ax, ay, x, y, w, h) {
+    const sc = o.scale ?? 1;
+    const rad = ((o.rotate ?? 0) * Math.PI) / 180;
+    const m = this._matrix().translate(ax, ay).rotate((rad * 180) / Math.PI).scale(sc, sc);
+    const pts = [[x - w / 2, y - h / 2], [x + w / 2, y - h / 2], [x + w / 2, y + h / 2], [x - w / 2, y + h / 2]].map(([px, py]) => m.transformPoint(new DOMPoint(px - ax, py - ay)));
+    const xs = pts.map((p) => p.x);
+    const ys = pts.map((p) => p.y);
+    return { x: (Math.min(...xs) + Math.max(...xs)) / 2, y: (Math.min(...ys) + Math.max(...ys)) / 2, w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) };
+  }
+
+  _designBox(x, y, w, h) {
+    const m = this._matrix();
+    const pts = [[x - w / 2, y - h / 2], [x + w / 2, y - h / 2], [x + w / 2, y + h / 2], [x - w / 2, y + h / 2]].map(([px, py]) => m.transformPoint(new DOMPoint(px, py)));
+    const xs = pts.map((p) => p.x);
+    const ys = pts.map((p) => p.y);
+    return { x: (Math.min(...xs) + Math.max(...xs)) / 2, y: (Math.min(...ys) + Math.max(...ys)) / 2, w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) };
+  }
+
+  // An element inside groups is only on screen while every group is.
+  _attach(kind, at, out, box, extra = null) {
+    for (const g of this._spans || []) {
+      at = Math.max(at, g.at);
+      out = Math.min(out, g.out);
+    }
+    if (out > at) this.engine.layoutLog.push({ kind, at, out, box, ...extra });
   }
 
   _fromDesign(box) {
@@ -398,13 +480,18 @@ export class Stage {
 
   // keys: [{ at, x, y, zoom, dur }]. Call before drawing anything else.
   camera(keys, o = {}) {
+    // A scene that moves its own camera gets no automatic camera.
+    if (this.engine.planning) this.engine.manualCamera = true;
     const list = [{ at: 0, x: this.cx, y: this.cy, zoom: 1, dur: 0 }, ...keys.map((k) => ({ x: this.cx, y: this.cy, zoom: 1, dur: 1.1, ...k, at: this.time(k.at ?? 0) }))].sort((a, b) => a.at - b.at);
     let cur = { ...list[0] };
+    if (o.shake) this.engine.moving = true;
     for (let i = 1; i < list.length; i++) {
       const k = list[i];
       if (this.t < k.at) break;
       const prev = cur;
-      const p = easeFn(k.ease ?? 'inOut')(clamp((this.t - k.at) / Math.max(0.001, k.dur / this.pace)));
+      const raw = (this.t - k.at) / Math.max(0.001, k.dur / this.pace);
+      if (raw > 0 && raw < 1) this.engine.moving = true;
+      const p = easeFn(k.ease ?? 'inOut')(clamp(raw));
       cur = { x: lerp(prev.x, k.x, p), y: lerp(prev.y, k.y, p), zoom: lerp(prev.zoom, k.zoom, p), rotate: lerp(prev.rotate || 0, k.rotate || 0, p) };
     }
     const ctx = this.ctx;
@@ -425,23 +512,84 @@ export class Stage {
   group(o, fn) {
     if (typeof o === 'function') [o, fn] = [{}, o];
     const life = this._life(o, 'group', { enter: o.enter ?? 'none', sfx: null, dur: o.dur });
-    if (!life) {
-      this._suppress++;
-      try { fn(this); } finally { this._suppress--; }
-      return;
+    const planning = Boolean(this.engine.layoutLog);
+    if (planning) (this._spans ??= []).push({ at: this.time(o.at ?? 0), out: o.out === undefined ? Infinity : this.time(o.out) });
+    try {
+      if (!life || planning) {
+        if (!life) this._suppress++;
+        // The camera measures what a group holds where it rests, whether it
+        // is hidden, arriving or leaving at that moment.
+        if (planning) {
+          this.ctx.save();
+          this.ctx.translate(o.x ?? 0, o.y ?? 0);
+          if (o.rotate) this.ctx.rotate((o.rotate * Math.PI) / 180);
+          if ((o.scale ?? 1) !== 1) this.ctx.scale(o.scale, o.scale);
+        }
+        try { fn(this); } finally {
+          if (!life) this._suppress--;
+          if (planning) this.ctx.restore();
+        }
+        return;
+      }
+      this._push(o.x ?? 0, o.y ?? 0, life, o);
+      try { fn(this); } finally { this.ctx.restore(); }
+    } finally {
+      if (planning) this._spans.pop();
     }
-    this._push(o.x ?? 0, o.y ?? 0, life, o);
-    try { fn(this); } finally { this.ctx.restore(); }
+  }
+
+  // While the camera is planned, runs a custom drawing once on a context
+  // that records how far its paths, shapes, text and images reach. It runs at
+  // its own place, scale and rotation, without its entrance or exit.
+  _measureDrawing(o, fn, life, random) {
+    const ctx = this.ctx;
+    const at = this.time(o.at ?? 0);
+    const out = o.out === undefined ? Infinity : this.time(o.out);
+    ctx.save();
+    ctx.translate(o.x ?? 0, o.y ?? 0);
+    if (o.rotate) ctx.rotate((o.rotate * Math.PI) / 180);
+    if (o.scale) ctx.scale(o.scale, o.scale);
+    const rec = boundsRecorder(ctx, this.engine.scale);
+    const saved = Math.random;
+    Math.random = random;
+    try {
+      fn(rec.proxy, life ? { ...life, p: 1, q: 0 } : { p: 1, q: 0, at, dur: 0.001, enter: 'none', exit: 'fade', local: Math.max(0, this.t - at) });
+    } catch {
+      // drawn for real later, where its errors are reported
+    } finally {
+      Math.random = saved;
+      ctx.restore();
+    }
+    const box = rec.box();
+    if (box) this._attach('custom', at, out, box);
+  }
+
+  // Points the camera at an element or a region from `at` until `out`. It
+  // draws nothing. target: an id drawn earlier, { x, y, w, h } (center and
+  // size) or [x, y, w, h].
+  focus(target, o = {}) {
+    const b = typeof target === 'string' ? this.get(target) : Array.isArray(target) ? { x: target[0], y: target[1], w: target[2], h: target[3] } : target;
+    if (!b || !Number.isFinite(b.x) || !Number.isFinite(b.y) || !(b.w > 0) || !(b.h > 0)) throw new SceneError('focus needs an element id, { x, y, w, h } or [x, y, w, h]');
+    if (this.engine.layoutLog) this._attach('focus', this.time(o.at ?? 0), o.out === undefined ? Infinity : this.time(o.out), this._designBox(b.x, b.y, b.w, b.h), { explicit: true });
   }
 
   // Custom drawing with the same timing rules: fn(ctx, life) where life.p is
   // the 0..1 entrance progress and ctx is already moved to x, y.
+  // Math.random inside fn has its own sequence for each drawing, so its
+  // numbers do not depend on which other drawings are on screen.
   draw(o, fn) {
     if (typeof o === 'function') [o, fn] = [{}, o];
     const life = this._life(o, 'custom', { enter: o.enter ?? 'none', sfx: o.sfx ?? null });
+    const random = mulberry32(this._seed('random', o));
+    if (this.engine.layoutLog) return this._measureDrawing(o, fn, life, random);
     if (!life) return;
     this._push(o.x ?? 0, o.y ?? 0, life, o);
-    try { fn(this.ctx, life); } finally { this.ctx.restore(); }
+    const saved = Math.random;
+    Math.random = random;
+    try { fn(this.ctx, life); } finally {
+      Math.random = saved;
+      this.ctx.restore();
+    }
   }
 
   // ---------- text ----------
@@ -479,9 +627,21 @@ export class Stage {
     if (!th.fonts[role]) throw new SceneError(`font "${role}" is not one of display, body, hand, mono`);
     const size = o.size ?? 48;
     const weight = o.weight ?? (o.bold ? BOLD[role] ?? 700 : undefined);
-    const font = fontString(th, role, size, weight);
+    const font = fontString(th, role, size, weight, this.engine.config.language);
     const align = o.align ?? 'center';
-    const lay = layoutText(ctx, { str: String(str), font, size, maxWidth: o.maxWidth ?? o.width ?? this._w(0.8), lineHeight: o.lineHeight ?? 1.24 });
+    // Large text gets slightly tighter letter spacing in looks that set a
+    // tracking value.
+    const tracking = size >= 56 ? (th.fonts[role].tracking ?? 0) * size : 0;
+    // save() and restore() put the spacing back. Reading ctx.letterSpacing
+    // back is not reliable in Chrome.
+    ctx.save();
+    ctx.letterSpacing = `${tracking}px`;
+    let lay;
+    try {
+      lay = layoutText(ctx, { str: String(str), font, size, maxWidth: o.maxWidth ?? o.width ?? this._w(0.8), lineHeight: o.lineHeight ?? 1.24 });
+    } finally {
+      ctx.restore();
+    }
     const x = o.x ?? this.cx;
     const y = o.y ?? this.cy;
     const left = align === 'left' ? x : align === 'right' ? x - lay.width : x - lay.width / 2;
@@ -513,11 +673,12 @@ export class Stage {
     const accent = colorOf(th, o.mark ?? 'accent');
     if (o.bg) {
       const bgc = colorOf(th, o.bg === true ? 'surface' : o.bg);
-      this.pen.draw(ctx, { kind: 'rect', w: g.w, h: g.h, r: o.radius ?? Math.min(th.radius, g.h / 2) }, { fill: bgc, stroke: o.border ? colorOf(th, o.border) : 'none', width: 2, shadow: th.shadow, seed: this._seed('textbg', o, plain), rough: false }, { stroke: 1, fill: 1 });
+      this.pen.draw(ctx, { kind: 'rect', w: g.w, h: g.h, r: o.radius ?? Math.min(th.radius, g.h / 2) }, { fill: bgc, stroke: o.border ? colorOf(th, o.border) : 'none', width: 2, shadow: this._shadow(), seed: this._seed('textbg', o, plain), rough: false }, { stroke: 1, fill: 1 });
     }
     ctx.font = font;
     ctx.textBaseline = 'alphabetic';
     ctx.textAlign = 'left';
+    ctx.letterSpacing = `${tracking}px`;
     const ox = -lay.width / 2;
     const oy = -lay.height / 2;
     const glow = th.stroke.glow && o.glow !== false && kind === 'title' ? th.stroke.glow : 0;
@@ -556,6 +717,7 @@ export class Stage {
       lay.lines.forEach((line) => {
         const lx0 = ox + lineStartX(line, lay.width, align);
         for (const w of line.words) {
+          if (w.tight) chars += 1;
           if (chars <= 0) return;
           const part = w.text.slice(0, chars);
           drawWord({ ...w, text: part }, lx0 + w.x, oy + line.y);
@@ -607,6 +769,39 @@ export class Stage {
     });
   }
 
+  math(tex, o = {}) {
+    if (typeof tex !== 'string') throw new SceneError('math: use a fixed TeX string');
+    if (o.display !== undefined && typeof o.display !== 'boolean') throw new SceneError('math: display must be true or false');
+    if (o.align !== undefined && !['center', 'left'].includes(o.align)) throw new SceneError('math: align must be center or left');
+    const data = this.engine.mathData(tex, o.display ?? true, this.id, this.t);
+    if (data?.error) throw new SceneError(`math "${tex}": ${data.error}`);
+    const size = o.size ?? 72;
+    const unit = size / (data?.unitsPerEm ?? 1000);
+    const [vx, vy, vw, vh] = data?.viewBox ?? [0, -1000, 0, 1000];
+    const w = vw * unit;
+    const h = vh * unit;
+    const x = (o.x ?? this.cx) + (o.align === 'left' ? w / 2 : 0);
+    const y = o.y ?? this.cy;
+    this._register(o.id, x, y, w, h);
+    const g = geom(x, y, w, h);
+    const th = this.theme;
+    const life = this._life(o, 'text', { enter: th.enter.shape === 'draw' ? 'draw' : th.enter.text, label: tex });
+    if (!life || !data) return g;
+    const ctx = this.ctx;
+    const color = colorOf(th, o.color, 'ink');
+    this._push(x, y, life, o);
+    const draw = life.enter === 'draw' || life.enter === 'write';
+    const stroke = draw ? ease.inOut(clamp(life.p / 0.78)) : 1;
+    const fill = draw ? clamp((life.p - 0.78) / 0.22) : 1;
+    for (const d of data.paths) {
+      const path = scalePath(d, unit, -w / 2 - vx * unit, -h / 2 - vy * unit);
+      this.pen.draw(ctx, { kind: 'path', d: path }, { stroke: draw && life.p < 1 ? color : 'none', width: Math.max(0.7, size / 72), fill: color, rough: false }, { stroke, fill });
+    }
+    this._logText({ text: tex, x0: -w / 2, y0: -h / 2, x1: w / 2, y1: h / 2, size, fg: color, bg: null });
+    ctx.restore();
+    return g;
+  }
+
   // ---------- shapes ----------
 
   box(label, o = {}) {
@@ -615,7 +810,7 @@ export class Stage {
     const ctx = this.ctx;
     const size = o.size ?? 44;
     const role = o.font ?? 'body';
-    const font = fontString(th, role, size, o.weight ?? BOLD[role]);
+    const font = fontString(th, role, size, o.weight ?? BOLD[role], this.engine.config.language);
     const pad = o.padding ?? size * 0.62;
     const maxW = o.w ? o.w - pad * 2 : o.maxWidth ?? 560;
     const lay = label !== undefined && label !== null && label !== '' ? layoutText(ctx, { str: String(label), font, size, maxWidth: maxW, lineHeight: 1.15 }) : null;
@@ -637,7 +832,7 @@ export class Stage {
     const stroke = colorOf(th, o.stroke ?? o.color, 'ink');
     const fill = o.fill !== undefined ? colorOf(th, o.fill) : o.color ? tintOf(th, o.color) : th.surface;
     const spec = shape === 'ellipse' || shape === 'circle' ? { kind: 'ellipse', w, h } : { kind: 'rect', w, h, r: o.radius ?? th.radius };
-    this.pen.draw(ctx, spec, { stroke: o.border === false ? 'none' : stroke, width: o.width ?? th.stroke.width, fill, fillStyle: o.fillStyle, dashed: o.dashed, seed: this._seed('box', o, plain), shadow: th.shadow, glow: o.glow ?? (th.stroke.glow && o.color ? th.stroke.glow : 0) }, prog);
+    this.pen.draw(ctx, spec, { stroke: o.border === false ? 'none' : stroke, width: o.width ?? th.stroke.width, fill, fillStyle: o.fillStyle, dashed: o.dashed, seed: this._seed('box', o, plain), shadow: this._shadow(), glow: o.glow ?? (th.stroke.glow && o.color ? th.stroke.glow : 0) }, prog);
     const textColor = o.textColor ? colorOf(th, o.textColor) : this._autoTextColor(fill, th.ink);
     const top = -contentH / 2;
     const prevA = ctx.globalAlpha;
@@ -672,6 +867,13 @@ export class Stage {
     const th = this.theme;
     const pts = points.map((p) => this._point(p)).map((p) => [p.x, p.y]);
     const life = this._life(o, 'line', { enter: o.enter ?? 'draw' });
+    if (this.engine.layoutLog) {
+      const xs = pts.map((p) => p[0]);
+      const ys = pts.map((p) => p[1]);
+      // A line thick enough to read as a bar is a shape the camera keeps whole.
+      const thick = (o.width ?? th.stroke.width) >= 10;
+      this._logLayout(thick ? 'shape' : 'line', this.time(o.at ?? 0), o.out === undefined ? Infinity : this.time(o.out), (Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2, Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
+    }
     if (!life) return;
     this.ctx.save();
     const tr = this._enterTransform(life.enter === 'draw' ? { ...life, enter: 'none' } : life);
@@ -684,6 +886,19 @@ export class Stage {
   path(d, o = {}) {
     const th = this.theme;
     const life = this._life(o, 'line', { enter: o.enter ?? 'draw' });
+    if (this.engine.layoutLog) {
+      const pts = [];
+      for (const { c, v } of absolutize(parsePath(d))) {
+        if (c === 'A') pts.push([v[5], v[6]], [v[5] - v[0], v[6] - v[1]], [v[5] + v[0], v[6] + v[1]]);
+        else for (let i = 0; i + 1 < v.length; i += 2) pts.push([v[i], v[i + 1]]);
+      }
+      if (pts.length) {
+        const xs = pts.map((q) => q[0] + (o.x ?? 0));
+        const ys = pts.map((q) => q[1] + (o.y ?? 0));
+        // A closed or filled path is a shape; an open one is a line.
+        this._logLayout(/z/i.test(d) || o.fill ? 'shape' : 'line', this.time(o.at ?? 0), o.out === undefined ? Infinity : this.time(o.out), (Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2, Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
+      }
+    }
     if (!life) return;
     this._push(o.x ?? 0, o.y ?? 0, life.enter === 'draw' ? { ...life, enter: 'none' } : life, o);
     const prog = this._drawProgress(life);
@@ -706,6 +921,11 @@ export class Stage {
     const c = { x: (a.x + b.x) / 2 - dy * bend * 0.5, y: (a.y + b.y) / 2 + dx * bend * 0.5 };
     const d = bend ? quadD([a.x, a.y], [c.x, c.y], [b.x, b.y]) : polyD([[a.x, a.y], [b.x, b.y]]);
     const life = this._life(o, 'arrow', { enter: o.enter ?? 'draw', dur: o.dur ?? 0.7 });
+    if (this.engine.layoutLog) {
+      const xs = [a.x, b.x, c.x];
+      const ys = [a.y, b.y, c.y];
+      this._logLayout('arrow', this.time(o.at ?? 0), o.out === undefined ? Infinity : this.time(o.out), (Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2, Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
+    }
     const result = { from: a, to: b, control: c };
     if (!life) return result;
     const ctx = this.ctx;
@@ -761,7 +981,7 @@ export class Stage {
       if (la > 0) {
         ctx.save();
         ctx.globalAlpha *= la;
-        ctx.font = fontString(th, o.labelFont ?? 'hand', ls);
+        ctx.font = fontString(th, o.labelFont ?? 'hand', ls, undefined, this.engine.config.language);
         ctx.fillStyle = colorOf(th, o.labelColor ?? o.color, 'muted');
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
@@ -819,6 +1039,15 @@ export class Stage {
     const y = o.y ?? this.cy;
     const bgSize = o.bg ? size * (o.bgScale ?? 1.7) : size;
     this._register(o.id, x, y, bgSize, bgSize, o.bg === 'square' ? 'rect' : o.bg ? 'ellipse' : 'rect');
+    if (this.engine.layoutLog && o.label) {
+      // The label belongs to the icon for the camera, not for arrows.
+      const ls = o.labelSize ?? 36;
+      this.ctx.save();
+      this.ctx.font = fontString(th, o.labelFont ?? 'body', ls, BOLD[o.labelFont ?? 'body'], this.engine.config.language);
+      const lw = this.ctx.measureText(String(o.label)).width;
+      this.ctx.restore();
+      this._pendingExtra = this._elementBox(o, x, y, x, y + bgSize / 2 + ls * 0.45 + ls / 2, lw, ls * 1.1);
+    }
     this._iconPaths(name, size);
     const life = this._life(o, 'icon', { label: name });
     const g = geom(x, y, bgSize, bgSize);
@@ -829,7 +1058,7 @@ export class Stage {
     if (o.bg) {
       const bgColor = o.bg === true || o.bg === 'circle' || o.bg === 'square' ? tintOf(th, o.color ?? th.accent) : colorOf(th, o.bg);
       const spec = o.bg === 'square' ? { kind: 'rect', w: bgSize, h: bgSize, r: th.radius } : { kind: 'ellipse', w: bgSize, h: bgSize };
-      this.pen.draw(this.ctx, spec, { stroke: th.stroke.rough ? color : 'none', width: th.stroke.width * 0.8, fill: bgColor, seed: this._seed('iconbg', o, name), shadow: th.shadow }, { stroke: prog.stroke, fill: prog.fill });
+      this.pen.draw(this.ctx, spec, { stroke: th.stroke.rough ? color : 'none', width: th.stroke.width * 0.8, fill: bgColor, seed: this._seed('iconbg', o, name), shadow: this._shadow() }, { stroke: prog.stroke, fill: prog.fill });
     }
     this._iconAt(name, 0, 0, size, color, prog.stroke, this._seed('icon', o, name), o.weight);
     if (o.label) {
@@ -837,7 +1066,7 @@ export class Stage {
       const ctx = this.ctx;
       ctx.save();
       ctx.globalAlpha *= life.enter === 'draw' ? prog.text : 1;
-      ctx.font = fontString(th, o.labelFont ?? 'body', ls, BOLD[o.labelFont ?? 'body']);
+      ctx.font = fontString(th, o.labelFont ?? 'body', ls, BOLD[o.labelFont ?? 'body'], this.engine.config.language);
       ctx.fillStyle = colorOf(th, o.labelColor, 'ink');
       ctx.textAlign = 'center';
       ctx.textBaseline = 'top';
@@ -852,13 +1081,34 @@ export class Stage {
   }
 
   image(src, o = {}) {
-    const th = this.theme;
     const img = this.engine.image(src);
-    const ratio = img.naturalWidth / img.naturalHeight;
+    return this._picture(src, img, img.naturalWidth, img.naturalHeight, o);
+  }
+
+  clip(src, o = {}) {
+    const clip = this.engine.clip(src);
+    const from = o.from ?? 0;
+    const speed = o.speed ?? 1;
+    const volume = o.volume ?? 0;
+    for (const [name, value, lo, hi] of [['from', from, 0, Infinity], ['speed', speed, 0.25, 4], ['volume', volume, 0, 1]]) {
+      if (!Number.isFinite(value) || value < lo || value > hi) throw new SceneError(`clip ${name} must be ${name === 'from' ? 'a non-negative number' : `from ${lo} to ${hi}`}`);
+    }
+    const at = this.time(o.at ?? 0);
+    const out = o.out === undefined ? this.dur : Math.min(this.dur, this.time(o.out));
+    const end = o.loop ? out : Math.min(out, at + Math.max(0, clip.duration - from) / speed);
+    const n = this._clipSeq = (this._clipSeq || 0) + 1;
+    if (this.engine.recorder) this.engine.recorder.push({ kind: 'clip', key: `clip|${at}|${o.id ?? n}|${src}`, at, end, out, from, speed, loop: !!o.loop, volume, hasAudio: clip.hasAudio, duration: clip.duration, src: clip.src, url: clipURL('audio', clip.src) });
+    const frame = clipFrame(clip, this.t, { at, from, speed, loop: o.loop });
+    return this._picture(src, () => frame === null ? null : this.engine.clipImage(clip, frame), clip.width, clip.height, o);
+  }
+
+  _picture(src, source, naturalWidth, naturalHeight, o) {
+    const th = this.theme;
+    const ratio = naturalWidth / naturalHeight;
     let w = o.w;
     let h = o.h;
     if (!w && !h) {
-      w = Math.min(this._w(0.6), img.naturalWidth);
+      w = Math.min(this._w(0.6), naturalWidth);
       h = w / ratio;
     } else if (!h) h = w / ratio;
     else if (!w) w = h * ratio;
@@ -878,9 +1128,9 @@ export class Stage {
     const ctx = this.ctx;
     const r = o.radius ?? (frame === 'phone' ? 46 : th.radius);
     if (frame === 'phone') {
-      this.pen.draw(ctx, { kind: 'rect', w: fw, h: fh, r: r + 10 }, { fill: '#111418', stroke: 'none', width: 0, shadow: th.shadow || { color: 'rgba(0,0,0,0.25)', blur: 30, y: 12 }, rough: false }, { stroke: 1, fill: 1 });
+      this.pen.draw(ctx, { kind: 'rect', w: fw, h: fh, r: r + 10 }, { fill: '#111418', stroke: 'none', width: 0, shadow: this._shadow(undefined, { color: 'rgba(0,0,0,0.25)', blur: 30, y: 12 }), rough: false }, { stroke: 1, fill: 1 });
     } else if (bar) {
-      this.pen.draw(ctx, { kind: 'rect', w: fw, h: fh, r }, { fill: th.dark ? '#1b2233' : '#ffffff', stroke: th.dark ? '#2b3550' : 'rgba(0,0,0,0.08)', width: 2, shadow: th.shadow || { color: 'rgba(0,0,0,0.18)', blur: 26, y: 10 }, rough: false }, { stroke: 1, fill: 1 });
+      this.pen.draw(ctx, { kind: 'rect', w: fw, h: fh, r }, { fill: th.dark ? '#1b2233' : '#ffffff', stroke: th.dark ? '#2b3550' : 'rgba(0,0,0,0.08)', width: 2, shadow: this._shadow(undefined, { color: 'rgba(0,0,0,0.18)', blur: 26, y: 10 }), rough: false }, { stroke: 1, fill: 1 });
       const dots = ['#ff5f57', '#febc2e', '#28c840'];
       dots.forEach((c, i) => {
         ctx.fillStyle = c;
@@ -893,7 +1143,7 @@ export class Stage {
         this.pen.draw(ctx, { kind: 'rect', w: pw, h: bar * 0.58, r: bar * 0.29 }, { fill: th.dark ? '#111727' : '#f1f3f7', stroke: 'none', width: 0, rough: false }, { stroke: 1, fill: 1 });
         ctx.save();
         ctx.translate(0, -fh / 2 + bar / 2);
-        ctx.font = fontString(th, 'body', bar * 0.34);
+        ctx.font = fontString(th, 'body', bar * 0.34, undefined, this.engine.config.language);
         ctx.fillStyle = th.dark ? '#aab4c8' : '#5b6474';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
@@ -901,9 +1151,9 @@ export class Stage {
         ctx.restore();
       }
     } else if (frame === 'card') {
-      this.pen.draw(ctx, { kind: 'rect', w: fw, h: fh, r: r + cardPad / 2 }, { fill: th.dark ? th.surface : '#ffffff', stroke: th.stroke.rough ? th.ink : 'none', width: th.stroke.width * 0.8, shadow: th.shadow || { color: 'rgba(0,0,0,0.16)', blur: 24, y: 8 }, seed: this._seed('card', o, src), fillStyle: 'solid' }, { stroke: 1, fill: 1 });
+      this.pen.draw(ctx, { kind: 'rect', w: fw, h: fh, r: r + cardPad / 2 }, { fill: th.dark ? th.surface : '#ffffff', stroke: th.stroke.rough ? th.ink : 'none', width: th.stroke.width * 0.8, shadow: this._shadow(undefined, { color: 'rgba(0,0,0,0.16)', blur: 24, y: 8 }), seed: this._seed('card', o, src), fillStyle: 'solid' }, { stroke: 1, fill: 1 });
     } else if (o.shadow !== false && th.shadow) {
-      this.pen.draw(ctx, { kind: 'rect', w, h, r }, { fill: th.surface, stroke: 'none', width: 0, shadow: th.shadow, rough: false }, { stroke: 1, fill: 1 });
+      this.pen.draw(ctx, { kind: 'rect', w, h, r }, { fill: th.surface, stroke: 'none', width: 0, shadow: this._shadow(), rough: false }, { stroke: 1, fill: 1 });
     }
     const iy = frame === 'phone' ? 0 : bar / 2;
     ctx.save();
@@ -924,7 +1174,12 @@ export class Stage {
     }
     dw *= kb;
     dh *= kb;
-    ctx.drawImage(img, -dw / 2, iy - dh / 2, dw, dh);
+    const img = typeof source === 'function' ? source() : source;
+    if (img) ctx.drawImage(img, -dw / 2, iy - dh / 2, dw, dh);
+    else {
+      ctx.fillStyle = th.surface;
+      ctx.fillRect(-w / 2, iy - h / 2, w, h);
+    }
     ctx.restore();
     if (o.border) {
       this.pen.draw(ctx, { kind: 'rect', w, h, r }, { stroke: colorOf(th, o.border === true ? 'ink' : o.border), width: th.stroke.width, seed: this._seed('imgborder', o, src) }, { stroke: 1, fill: 1 });
@@ -1008,7 +1263,7 @@ export class Stage {
     const base = this.time(o.at ?? 0);
     const stagger = (o.stagger ?? 0.7) / this.pace;
     const role = o.font ?? 'body';
-    const font = fontString(th, role, size, o.weight);
+    const font = fontString(th, role, size, o.weight, this.engine.config.language);
     const out = [];
     items.forEach((raw, i) => {
       const it = typeof raw === 'string' ? { text: raw } : raw;
@@ -1044,7 +1299,7 @@ export class Stage {
         this.pen.draw(ctx, { kind: 'poly', points: [[-r * 1.6, 0], [r * 1.6, 0]] }, { stroke: color, width: th.stroke.width, seed: 11 + i, single: true }, { stroke: 1, fill: 1 });
         break;
       case 'number': {
-        ctx.font = fontString(th, 'display', size * 0.62);
+        ctx.font = fontString(th, 'display', size * 0.62, undefined, this.engine.config.language);
         ctx.fillStyle = color;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
@@ -1129,7 +1384,7 @@ export class Stage {
           ctx.save();
           ctx.globalAlpha *= g;
           const vs = o.valueSize ?? 40;
-          ctx.font = fontString(th, 'display', vs);
+          ctx.font = fontString(th, 'display', vs, undefined, this.engine.config.language);
           ctx.fillStyle = colorOf(th, 'ink');
           ctx.textAlign = 'center';
           ctx.textBaseline = 'bottom';
@@ -1143,7 +1398,7 @@ export class Stage {
         const ls = o.labelSize ?? 34;
         ctx.save();
         ctx.globalAlpha *= clamp((this.t - at) / (0.4 / this.pace));
-        ctx.font = fontString(th, 'body', ls);
+        ctx.font = fontString(th, 'body', ls, undefined, this.engine.config.language);
         ctx.fillStyle = colorOf(th, 'muted');
         ctx.textAlign = 'center';
         ctx.textBaseline = 'top';
@@ -1203,7 +1458,7 @@ export class Stage {
       });
     }
     if (o.labels) {
-      ctx.font = fontString(th, 'body', o.labelSize ?? 30);
+      ctx.font = fontString(th, 'body', o.labelSize ?? 30, undefined, this.engine.config.language);
       ctx.fillStyle = colorOf(th, 'muted');
       ctx.textAlign = 'center';
       ctx.textBaseline = 'top';
@@ -1244,7 +1499,7 @@ export class Stage {
           const lr = r + (o.labelOffset ?? 56);
           const ls = o.labelSize ?? 32;
           const txt = d.label !== undefined ? `${d.label} ${Math.round((d.value / total) * 100)}%` : `${Math.round((d.value / total) * 100)}%`;
-          ctx.font = fontString(th, 'body', ls, BOLD.body);
+          ctx.font = fontString(th, 'body', ls, BOLD.body, this.engine.config.language);
           ctx.fillStyle = colorOf(th, 'ink');
           ctx.textAlign = Math.cos(mid) > 0.2 ? 'left' : Math.cos(mid) < -0.2 ? 'right' : 'center';
           ctx.textBaseline = 'middle';
@@ -1264,33 +1519,64 @@ export class Stage {
     const ctx = this.ctx;
     const C = th.code;
     const size = o.size ?? 32;
-    const lines = String(src).replace(/\t/g, '  ').split('\n');
+    const steps = Array.isArray(src) ? resolveCodeSteps(src, o, (v) => this.time(v)) : null;
+    if (steps) o = { ...o, at: o.at ?? steps[0].at };
+    const morph = steps ? codeMorphState(steps, this.t, o.morphDur ?? 0.8, this.pace) : null;
+    const lines = steps ? steps[morph.to].lines : String(src).replace(/\t/g, '  ').split('\n');
+    const firstLines = steps ? steps[0].lines : lines;
     const lh = size * 1.5;
     const pad = size * 0.9;
     const barH = o.title === false ? 0 : size * 1.6;
-    const font = fontString(th, 'mono', size);
+    const font = fontString(th, 'mono', size, undefined, this.engine.config.language);
     ctx.save();
     ctx.font = font;
     const charW = ctx.measureText('M').width;
     ctx.restore();
-    const numW = o.lineNumbers === false ? 0 : charW * (String(lines.length).length + 2);
-    const w = o.w ?? Math.min(this._w(0.86), Math.max(...lines.map((l) => l.length)) * charW + numW + pad * 2);
-    const h = o.h ?? lines.length * lh + pad * 1.6 + barH;
+    const maxLines = steps ? Math.max(...steps.map((step) => step.lines.length)) : lines.length;
+    const numW = o.lineNumbers === false ? 0 : charW * (String(maxLines).length + 2);
+    const allLines = steps ? steps.flatMap((step) => step.lines) : lines;
+    const naturalW = Math.max(...allLines.map((l) => l.length)) * charW + numW + pad * 2;
+    const w = o.w ?? Math.min(this._w(0.86), naturalW);
+    const h = o.h ?? (morph ? morph.lines : lines.length) * lh + pad * 1.6 + barH;
     const x = o.x ?? this.cx;
     const y = o.y ?? this.cy;
     this._register(o.id, x, y, w, h);
+    // The camera keeps the tallest step in view, not only the current one.
+    if (this.engine.layoutLog && steps && !o.h) this._register(undefined, x, y, w, Math.max(...steps.map((step) => step.lines.length)) * lh + pad * 1.6 + barH);
     const at = this.time(o.at ?? 0);
     const reveal = o.reveal ?? 'type';
     const cps = (o.cps ?? 40) * this.pace;
-    const chars = lines.reduce((a, l) => a + l.length + 1, 0);
+    const chars = firstLines.reduce((a, l) => a + l.length + 1, 0);
     const typeDur = chars / cps;
     const lineDelay = (o.lineDelay ?? 0.3) / this.pace;
     const startText = at + 0.35 / this.pace;
     if (reveal === 'type') this._record('code', startText, typeDur, { sfx: o.sfx }, { label: 'typing', sustain: true });
+    if (steps) steps.slice(1).forEach((step, i) => this._record('code', step.at, (o.morphDur ?? 0.8) / this.pace,
+      { sfx: o.sfx === false || o.sfx === null ? false : undefined, sfxGain: 0.2 }, { sfx: 'whoosh', label: `morph${i + 2}` }));
     const life = this._life({ ...o, sfx: null }, 'code', { dur: 0.5 });
+    if (this.engine.layoutLog) {
+      // Highlighted lines tell the camera where to look. The window is as
+      // tall as the step it shows, so each step has its own first line.
+      const focusLines = (list, from, until, rows) => {
+        const nums = (Array.isArray(list) ? list : list ? [list] : []).filter((n) => n >= 1 && n <= rows.length);
+        if (!nums.length) return;
+        const lineTop = y - (o.h ?? rows.length * lh + pad * 1.6 + barH) / 2 + barH + pad * 0.8;
+        // Whole lines across, with a little of the lines around them.
+        const y0 = lineTop + (Math.min(...nums) - 1) * lh - lh * 0.72;
+        const y1 = lineTop + Math.max(...nums) * lh + lh * 0.28;
+        const longest = Math.max(...rows.map((r) => r.length));
+        const x0 = x - w / 2 + pad;
+        const x1 = Math.min(x + w / 2 - pad, x0 + numW + longest * charW);
+        const box = this._elementBox(o, x, y, (x0 + x1) / 2, (y0 + y1) / 2, x1 - x0, y1 - y0);
+        this._attach('focus', from, until, box);
+      };
+      const out = o.out === undefined ? Infinity : this.time(o.out);
+      if (steps) steps.forEach((step, k) => focusLines(step.highlight, k ? step.at : this.time(o.highlightAt ?? at + 0.4 / this.pace), steps[k + 1]?.at ?? out, step.lines));
+      else focusLines(o.highlight, this.time(o.highlightAt ?? at + 0.4 / this.pace), out, lines);
+    }
     if (!life) return geom(x, y, w, h);
     this._push(x, y, life, o);
-    this.pen.draw(ctx, { kind: 'rect', w, h, r: Math.min(th.radius, 18) }, { fill: C.bg, stroke: th.stroke.rough ? C.border : 'none', width: th.stroke.width * 0.8, seed: this._seed('codebg', o), shadow: th.shadow || { color: 'rgba(0,0,0,0.2)', blur: 24, y: 10 }, rough: th.stroke.rough, fillStyle: 'solid' }, { stroke: 1, fill: 1 });
+    this.pen.draw(ctx, { kind: 'rect', w, h, r: Math.min(th.radius, 18) }, { fill: C.bg, stroke: th.stroke.rough ? C.border : 'none', width: th.stroke.width * 0.8, seed: this._seed('codebg', o), shadow: this._shadow(undefined, { color: 'rgba(0,0,0,0.2)', blur: 24, y: 10 }), rough: th.stroke.rough, fillStyle: 'solid' }, { stroke: 1, fill: 1 });
     const left = -w / 2 + pad;
     const top = -h / 2 + barH + pad * 0.8;
     if (barH) {
@@ -1301,15 +1587,27 @@ export class Stage {
         ctx.fill();
       });
       if (o.title) {
-        ctx.font = fontString(th, 'mono', size * 0.72);
+        ctx.font = fontString(th, 'mono', size * 0.72, undefined, this.engine.config.language);
         ctx.fillStyle = C.comment;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(String(o.title), 0, -h / 2 + barH / 2 + 4);
       }
     }
-    if (o.highlight) {
-      const hl = Array.isArray(o.highlight) ? o.highlight : [o.highlight];
+    if (steps && morph.to) {
+      const drawHighlight = (step, alpha) => {
+        const hl = Array.isArray(step.highlight) ? step.highlight : step.highlight ? [step.highlight] : [];
+        ctx.save();
+        ctx.globalAlpha *= alpha;
+        ctx.fillStyle = C.highlight;
+        for (const n of hl) ctx.fillRect(-w / 2 + 6, top + (n - 1) * lh - lh * 0.22, w - 12, lh);
+        ctx.restore();
+      };
+      drawHighlight(steps[morph.from], 1 - morph.p);
+      drawHighlight(steps[morph.to], morph.p);
+    } else if (steps ? steps[0].highlight : o.highlight) {
+      const highlight = steps ? steps[0].highlight : o.highlight;
+      const hl = Array.isArray(highlight) ? highlight : [highlight];
       const ha = clamp((this.t - this.time(o.highlightAt ?? at + 0.4 / this.pace)) / (0.4 / this.pace));
       if (ha > 0) {
         ctx.save();
@@ -1323,38 +1621,75 @@ export class Stage {
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
     const room = w / 2 - pad * 0.5 - (left + numW);
-    lines.forEach((line, i) => {
-      if (ctx.measureText(line).width > room) this._overflow(`code line ${i + 1} ("${line.trim().slice(0, 40)}") is wider than its window; shorten it, lower size or raise w`);
-    });
+    (steps || [{ lines }]).forEach((step, n) => step.lines.forEach((line, i) => {
+      if (ctx.measureText(line).width > room) this._overflow(`code ${steps ? `step ${n + 1} ` : ''}line ${i + 1} ("${line.trim().slice(0, 40)}") is wider than its window; shorten it, lower size or raise w`);
+    }));
     ctx.save();
     ctx.beginPath();
     ctx.rect(-w / 2, -h / 2, w, h);
     ctx.clip();
-    let budget = reveal === 'type' ? Math.floor((this.t - startText) * cps) : Infinity;
-    lines.forEach((line, i) => {
-      if (reveal === 'lines' && this.t < startText + i * lineDelay) return;
-      if (budget <= 0 && reveal === 'type') return;
-      const ly = top + i * lh;
+    if (steps && morph.to && morph.p < 1) {
+      const position = (tok, step) => ({ x: left + numW + ctx.measureText(step.lines[tok.row].slice(0, tok.column)).width, y: top + tok.row * lh });
+      const drawToken = (tok, pos, alpha) => {
+        if (alpha <= 0) return;
+        ctx.save();
+        ctx.globalAlpha *= alpha;
+        ctx.fillStyle = C[tok.type] ?? C.fg;
+        ctx.fillText(tok.text, pos.x, pos.y);
+        ctx.restore();
+      };
+      const before = codeTokens(steps[morph.from].lines, o.lang ?? 'js');
+      const after = codeTokens(lines, o.lang ?? 'js');
+      const pairs = matchTokens(before, after);
+      const keptBefore = new Set(pairs.map(([a]) => a));
+      const keptAfter = new Set(pairs.map(([, b]) => b));
+      for (const [a, b] of pairs) {
+        const start = position(before[a], steps[morph.from]);
+        const end = position(after[b], steps[morph.to]);
+        drawToken(after[b], { x: lerp(start.x, end.x, morph.p), y: lerp(start.y, end.y, morph.p) }, 1);
+      }
+      before.forEach((tok, i) => { if (!keptBefore.has(i)) drawToken(tok, position(tok, steps[morph.from]), morph.removed); });
+      after.forEach((tok, i) => { if (!keptAfter.has(i)) drawToken(tok, position(tok, steps[morph.to]), morph.added); });
       if (numW) {
         ctx.fillStyle = C.lineNo;
         ctx.textAlign = 'right';
-        ctx.fillText(String(i + 1), left + numW - charW * 1.4, ly);
+        const oldCount = steps[morph.from].lines.length;
+        for (let i = 0; i < Math.max(oldCount, lines.length); i++) {
+          ctx.save();
+          ctx.globalAlpha *= i < Math.min(oldCount, lines.length) ? 1 : i < oldCount ? morph.removed : morph.added;
+          ctx.fillText(String(i + 1), left + numW - charW * 1.4, top + i * lh);
+          ctx.restore();
+        }
         ctx.textAlign = 'left';
       }
-      let cx = left + numW;
-      for (const tok of highlightLine(line, o.lang ?? 'js')) {
-        let txt = tok.text;
-        if (reveal === 'type') {
-          if (budget <= 0) break;
-          txt = txt.slice(0, budget);
-          budget -= txt.length;
+    } else {
+      const activeReveal = morph?.to ? 'none' : reveal;
+      let budget = activeReveal === 'type' ? Math.floor((this.t - startText) * cps) : Infinity;
+      lines.forEach((line, i) => {
+        if (activeReveal === 'lines' && this.t < startText + i * lineDelay) return;
+        if (budget <= 0 && activeReveal === 'type') return;
+        const ly = top + i * lh;
+        if (numW) {
+          ctx.fillStyle = C.lineNo;
+          ctx.textAlign = 'right';
+          ctx.fillText(String(i + 1), left + numW - charW * 1.4, ly);
+          ctx.textAlign = 'left';
         }
-        ctx.fillStyle = C[tok.type] ?? C.fg;
-        ctx.fillText(txt, cx, ly);
-        cx += ctx.measureText(txt).width;
-      }
-      if (reveal === 'type') budget -= 1;
-    });
+        let cx = left + numW;
+        for (const tok of highlightLine(line, o.lang ?? 'js')) {
+          let txt = tok.text;
+          if (activeReveal === 'type') {
+            if (budget <= 0) break;
+            txt = txt.slice(0, budget);
+            budget -= txt.length;
+          }
+          ctx.fillStyle = C[tok.type] ?? C.fg;
+          ctx.fillText(txt, cx, ly);
+          cx += ctx.measureText(txt).width;
+        }
+        if (activeReveal === 'type') budget -= 1;
+      });
+    }
     ctx.restore();
     this._logText({ text: 'code', x0: -w / 2, y0: -h / 2, x1: w / 2, y1: h / 2, size, fg: C.fg, bg: C.bg, block: true });
     ctx.restore();
@@ -1395,9 +1730,28 @@ export class Stage {
       return r;
     });
     const life = this._life({ ...o, sfx: null }, 'terminal', { dur: 0.5, enter: o.enter ?? (th.enter.code === 'rise' ? 'rise' : 'fade') });
+    if (this.engine.layoutLog) {
+      // Each command with its output is a focus point while it is the
+      // newest thing in the terminal.
+      const out = o.out === undefined ? Infinity : this.time(o.out);
+      const lineTop = y - h / 2 + barH + pad * 0.8;
+      let row = 0;
+      const blocks = [];
+      for (const it of timed) {
+        const n = String(it.cmd ?? it.out ?? '').split('\n').length;
+        if (it.cmd !== undefined) blocks.push({ at: it.start, from: row, to: row + n });
+        else if (blocks.length) blocks[blocks.length - 1].to = row + n;
+        row += n;
+      }
+      if (blocks.length > 1) blocks.forEach((b, i) => {
+        const y0 = lineTop + b.from * lh - lh * 0.45;
+        const y1 = lineTop + b.to * lh - lh * 0.1;
+        this._attach('focus', b.at, blocks[i + 1]?.at ?? out, this._elementBox(o, x, y, x, (y0 + y1) / 2, w - pad * 2, y1 - y0));
+      });
+    }
     if (!life) return geom(x, y, w, h);
     this._push(x, y, life, o);
-    this.pen.draw(ctx, { kind: 'rect', w, h, r: Math.min(th.radius, 16) }, { fill: T.bg, stroke: th.stroke.rough ? th.ink : 'none', width: th.stroke.width * 0.8, seed: this._seed('termbg', o), shadow: th.shadow || { color: 'rgba(0,0,0,0.22)', blur: 26, y: 10 }, rough: th.stroke.rough, fillStyle: 'solid' }, { stroke: 1, fill: 1 });
+    this.pen.draw(ctx, { kind: 'rect', w, h, r: Math.min(th.radius, 16) }, { fill: T.bg, stroke: th.stroke.rough ? th.ink : 'none', width: th.stroke.width * 0.8, seed: this._seed('termbg', o), shadow: this._shadow(undefined, { color: 'rgba(0,0,0,0.22)', blur: 26, y: 10 }), rough: th.stroke.rough, fillStyle: 'solid' }, { stroke: 1, fill: 1 });
     ctx.save();
     const clip = new Path2D();
     clip.roundRect(-w / 2, -h / 2, w, barH, [Math.min(th.radius, 16), Math.min(th.radius, 16), 0, 0]);
@@ -1410,12 +1764,12 @@ export class Stage {
       ctx.arc(-w / 2 + pad * 0.8 + i * size * 0.8, -h / 2 + barH / 2, size * 0.2, 0, Math.PI * 2);
       ctx.fill();
     });
-    ctx.font = fontString(th, 'mono', size * 0.7);
+    ctx.font = fontString(th, 'mono', size * 0.7, undefined, this.engine.config.language);
     ctx.fillStyle = T.muted;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(o.title ?? 'terminal', 0, -h / 2 + barH / 2);
-    ctx.font = fontString(th, 'mono', size);
+    ctx.font = fontString(th, 'mono', size, undefined, this.engine.config.language);
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
     const left = -w / 2 + pad;
@@ -1543,3 +1897,260 @@ function wedgeD(r, hole, a0, a1) {
 }
 
 export { mixColor };
+
+// A drawing context that remembers the box everything drawn on it covers,
+// in design pixels. Each fill, stroke, text or image counts on its own, and
+// one that covers most of the frame is a background and does not count.
+// Path2D objects cannot be looked into and are skipped.
+export function boundsRecorder(ctx, scale, frame = null) {
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let x1 = -Infinity;
+  let y1 = -Infinity;
+  let path = null;
+  const point = (x, y) => {
+    const m = ctx.getTransform();
+    return [(m.a * x + m.c * y + m.e) / scale, (m.b * x + m.d * y + m.f) / scale];
+  };
+  const grow = (b, x, y) => {
+    const [px, py] = point(x, y);
+    if (!Number.isFinite(px) || !Number.isFinite(py)) return;
+    b.x0 = Math.min(b.x0, px);
+    b.y0 = Math.min(b.y0, py);
+    b.x1 = Math.max(b.x1, px);
+    b.y1 = Math.max(b.y1, py);
+  };
+  const empty = () => ({ x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity });
+  let paused = 0;
+  const commit = (b) => {
+    if (paused || !b || !(b.x1 >= b.x0) || !(b.y1 >= b.y0)) return;
+    if (frame && (b.x1 - b.x0) * (b.y1 - b.y0) > frame.W * frame.H * 0.6) return;
+    x0 = Math.min(x0, b.x0);
+    y0 = Math.min(y0, b.y0);
+    x1 = Math.max(x1, b.x1);
+    y1 = Math.max(y1, b.y1);
+  };
+  // How far a stroke reaches past its outline: half the line width in the
+  // drawing's own units, through the full transform.
+  const widen = (b) => {
+    const m = ctx.getTransform();
+    const r = ctx.lineWidth / 2 / scale;
+    const kx = r * Math.hypot(m.a, m.c);
+    const ky = r * Math.hypot(m.b, m.d);
+    return { x0: b.x0 - kx, y0: b.y0 - ky, x1: b.x1 + kx, y1: b.y1 + ky };
+  };
+  const onPath = (fn) => (...a) => {
+    path ??= empty();
+    fn(path, ...a);
+  };
+  // For strokes: the segments of each subpath of the current path, so
+  // sharp corners and square ends can be measured. A segment keeps its
+  // ends and the control points that give its direction there.
+  let subs = [];
+  let sub = null;
+  const dir = (p, q) => {
+    const dx = q[0] - p[0];
+    const dy = q[1] - p[1];
+    const L = Math.hypot(dx, dy);
+    return L > 1e-9 ? [dx / L, dy / L] : null;
+  };
+  const begin = (p) => {
+    sub = { first: p, last: p, segs: [], closed: false };
+    subs.push(sub);
+  };
+  // A segment from the current point to `end`; `a` and `b` are its first
+  // and last control points. Without a current point a path starts at `a`.
+  const segment = (a, b, end) => {
+    if (!sub) begin(a);
+    const p0 = sub.last;
+    if (dir(p0, a) || dir(p0, b) || dir(p0, end)) sub.segs.push({ p0, a, b, p1: end });
+    sub.last = end;
+  };
+  const close = () => {
+    if (!sub) return;
+    segment(sub.first, sub.first, sub.first);
+    sub.closed = true;
+    begin(sub.first);
+  };
+  const line = (x, y) => {
+    const p = point(x, y);
+    segment(p, p, p);
+  };
+  // An arc as one segment, with its direction at both ends. Canvas draws a
+  // straight line to the arc's start first.
+  const arcSegment = (cx, cy, rx, ry, rot, a0, a1, ccw) => {
+    const full = ccw ? a0 - a1 >= Math.PI * 2 : a1 - a0 >= Math.PI * 2;
+    const end = full ? a0 : a1;
+    const sign = ccw ? -1 : 1;
+    const turn = (x, y) => [x * Math.cos(rot) - y * Math.sin(rot), x * Math.sin(rot) + y * Math.cos(rot)];
+    const at = (t) => { const [x, y] = turn(rx * Math.cos(t), ry * Math.sin(t)); return [cx + x, cy + y]; };
+    const tangent = (t) => turn(-rx * Math.sin(t) * sign, ry * Math.cos(t) * sign);
+    const s0 = at(a0);
+    const s1 = at(end);
+    const t0 = tangent(a0);
+    const t1 = tangent(end);
+    line(s0[0], s0[1]);
+    segment(point(s0[0] + t0[0], s0[1] + t0[1]), point(s1[0] - t1[0], s1[1] - t1[1]), point(s1[0], s1[1]));
+  };
+  // Turns a point from `point` back into the current transform's units.
+  const toLocal = () => {
+    const inv = ctx.getTransform().inverse();
+    if (![inv.a, inv.b, inv.c, inv.d, inv.e, inv.f].every(Number.isFinite)) return null;
+    return (p) => {
+      const q = inv.transformPoint(new DOMPoint(p[0] * scale, p[1] * scale));
+      return [q.x, q.y];
+    };
+  };
+  // Works out the corners and ends of a stroke in the current transform's
+  // units, where the line width applies, and adds them to the box.
+  const strokeEnds = (b) => {
+    const local = toLocal();
+    if (!local) return b;
+    const hw = ctx.lineWidth / 2;
+    const miter = ctx.lineJoin === 'miter' ? ctx.miterLimit : 0;
+    // A mitered corner sticks out along the line that splits the corner in
+    // half. Canvas cuts it off when the corner is sharper than the miter
+    // limit allows.
+    const join = (u, v, p) => {
+      const sinHalf = Math.sqrt(Math.max(0, (1 + u[0] * v[0] + u[1] * v[1]) / 2));
+      const ox = u[0] - v[0];
+      const oy = u[1] - v[1];
+      const L = Math.hypot(ox, oy);
+      if (sinHalf < 1e-6 || 1 / sinHalf > miter || L < 1e-9) return;
+      grow(b, p[0] + (ox / L) * (hw / sinHalf), p[1] + (oy / L) * (hw / sinHalf));
+    };
+    const cap = (p, d) => {
+      grow(b, p[0] + (d[0] - d[1]) * hw, p[1] + (d[1] + d[0]) * hw);
+      grow(b, p[0] + (d[0] + d[1]) * hw, p[1] + (d[1] - d[0]) * hw);
+    };
+    for (const sp of subs) {
+      const segs = sp.segs.map((g) => {
+        const [p0, a, c, p1] = [g.p0, g.a, g.b, g.p1].map(local);
+        return { p0, p1, d0: dir(p0, a) ?? dir(p0, c) ?? dir(p0, p1), d1: dir(c, p1) ?? dir(a, p1) ?? dir(p0, p1) };
+      }).filter((g) => g.d0 && g.d1);
+      const n = segs.length;
+      if (!n) continue;
+      if (miter) {
+        for (let i = 1; i < n; i++) join(segs[i - 1].d1, segs[i].d0, segs[i].p0);
+        if (sp.closed) join(segs[n - 1].d1, segs[0].d0, segs[0].p0);
+      }
+      if (ctx.lineCap === 'square' && !sp.closed) {
+        cap(segs[0].p0, [-segs[0].d0[0], -segs[0].d0[1]]);
+        cap(segs[n - 1].p1, segs[n - 1].d1);
+      }
+    }
+    return b;
+  };
+  const corners = (b, x, y, w, h) => {
+    grow(b, x, y);
+    grow(b, x + w, y);
+    grow(b, x, y + h);
+    grow(b, x + w, y + h);
+  };
+  const shape = (x, y, w, h) => {
+    const b = empty();
+    corners(b, x, y, w, h);
+    commit(b);
+  };
+  const text = (str, x, y, stroked = false) => {
+    const m = ctx.measureText(String(str));
+    const l = m.actualBoundingBoxLeft || 0;
+    const a = m.actualBoundingBoxAscent || 0;
+    const b = empty();
+    corners(b, x - l, y - a, l + (m.actualBoundingBoxRight || m.width), a + (m.actualBoundingBoxDescent || 0));
+    commit(stroked ? widen(b) : b);
+  };
+  const record = {
+    beginPath: () => {
+      path = null;
+      subs = [];
+      sub = null;
+    },
+    moveTo: onPath((b, x, y) => { grow(b, x, y); begin(point(x, y)); }),
+    lineTo: onPath((b, x, y) => { grow(b, x, y); line(x, y); }),
+    quadraticCurveTo: onPath((b, cx, cy, x, y) => { grow(b, cx, cy); grow(b, x, y); const c = point(cx, cy); segment(c, c, point(x, y)); }),
+    bezierCurveTo: onPath((b, a, c, d, e, x, y) => { grow(b, a, c); grow(b, d, e); grow(b, x, y); segment(point(a, c), point(d, e), point(x, y)); }),
+    // A line toward the corner (x1, y1) that turns along a circle onto the
+    // line toward (x2, y2), as canvas draws it.
+    arcTo: onPath((b, x1, y1, x2, y2, r) => {
+      grow(b, x1, y1);
+      grow(b, x2, y2);
+      const local = toLocal();
+      if (!sub || !local) return line(x1, y1);
+      const p0 = local(sub.last);
+      const u = dir([x1, y1], p0);
+      const v = dir([x1, y1], [x2, y2]);
+      const sin = u && v ? Math.abs(u[0] * v[1] - u[1] * v[0]) : 0;
+      if (!(r > 0) || sin < 1e-9) return line(x1, y1);
+      const d = r / Math.tan(Math.acos(clamp(u[0] * v[0] + u[1] * v[1], -1, 1)) / 2);
+      const t1 = [x1 + u[0] * d, y1 + u[1] * d];
+      const t2 = [x1 + v[0] * d, y1 + v[1] * d];
+      grow(b, t1[0], t1[1]);
+      grow(b, t2[0], t2[1]);
+      line(t1[0], t1[1]);
+      segment(point(x1, y1), point(x1, y1), point(t2[0], t2[1]));
+    }),
+    arc: onPath((b, x, y, r, a0, a1, ccw = false) => { corners(b, x - r, y - r, r * 2, r * 2); arcSegment(x, y, r, r, 0, a0, a1, ccw); }),
+    ellipse: onPath((b, x, y, rx, ry, rot, a0, a1, ccw = false) => { const r = Math.max(rx, ry); corners(b, x - r, y - r, r * 2, r * 2); arcSegment(x, y, rx, ry, rot, a0, a1, ccw); }),
+    // A rectangle is a closed path of its own, and the next one starts at
+    // its first corner.
+    rect: onPath((b, x, y, w, h) => {
+      corners(b, x, y, w, h);
+      begin(point(x, y));
+      line(x + w, y);
+      line(x + w, y + h);
+      line(x, y + h);
+      close();
+    }),
+    roundRect: onPath((b, x, y, w, h) => { corners(b, x, y, w, h); begin(point(x, y)); }),
+    closePath: close,
+    fill: (p) => { if (!(p instanceof Path2D)) commit(path); },
+    stroke: (p) => { if (!(p instanceof Path2D) && path) commit(strokeEnds(widen(path))); },
+    fillRect: shape,
+    // Mitered corners reach half the line width out on both sides; round
+    // and bevelled ones no further than the widened outline.
+    strokeRect: (x, y, w, h) => {
+      const b = empty();
+      const hw = ctx.lineWidth / 2;
+      if (ctx.lineJoin === 'miter') {
+        corners(b, Math.min(x, x + w) - hw, Math.min(y, y + h) - hw, Math.abs(w) + hw * 2, Math.abs(h) + hw * 2);
+        commit(b);
+      } else {
+        corners(b, x, y, w, h);
+        commit(widen(b));
+      }
+    },
+    fillText: (str, x, y) => text(str, x, y),
+    strokeText: (str, x, y) => text(str, x, y, true),
+    drawImage: (img, ...a) => {
+      if (a.length === 2) shape(a[0], a[1], img.width, img.height);
+      else if (a.length === 4) shape(a[0], a[1], a[2], a[3]);
+      else if (a.length === 8) shape(a[4], a[5], a[6], a[7]);
+    },
+  };
+  // Parts that report their own place and time (UI panels, headlines) and
+  // decoration (floating cards) are left out.
+  const pause = (on) => { paused += on ? 1 : -1; };
+  const proxy = new Proxy(ctx, {
+    get(target, prop) {
+      if (prop === '__inkPause') return pause;
+      const v = target[prop];
+      if (typeof v !== 'function') return v;
+      const note = record[prop];
+      return note ? (...args) => { note(...args); return v.apply(target, args); } : v.bind(target);
+    },
+    set(target, prop, value) {
+      target[prop] = value;
+      return true;
+    },
+  });
+  return { proxy, box: () => (x1 >= x0 && y1 >= y0 && (x1 > x0 || y1 > y0) ? { x: (x0 + x1) / 2, y: (y0 + y1) / 2, w: x1 - x0, h: y1 - y0 } : null) };
+}
+
+function unionBox(a, b) {
+  const x0 = Math.min(a.x - a.w / 2, b.x - b.w / 2);
+  const y0 = Math.min(a.y - a.h / 2, b.y - b.h / 2);
+  const x1 = Math.max(a.x + a.w / 2, b.x + b.w / 2);
+  const y1 = Math.max(a.y + a.h / 2, b.y + b.h / 2);
+  return { x: (x0 + x1) / 2, y: (y0 + y1) / 2, w: x1 - x0, h: y1 - y0 };
+}

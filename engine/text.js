@@ -73,7 +73,7 @@ export function layoutText(ctx, { str, font, size, maxWidth = Infinity, lineHeig
       cur = { words: [], width: 0 };
     }
     const x = cur.words.length ? cur.width + gap : 0;
-    cur.words.push({ text: w.text, accent: w.accent, x, w: ww, index: index++ });
+    cur.words.push({ text: w.text, accent: w.accent, tight: w.tight, x, w: ww, index: index++ });
     cur.width = x + ww;
   }
   lines.push(cur);

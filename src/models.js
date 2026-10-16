@@ -3,11 +3,26 @@
 // on first use into ~/.cache/explainroo/models (or $EXPLAINROO_CACHE/models).
 import os from 'node:os';
 import path from 'node:path';
-import { ZH_VOICES } from './zhvoice.js';
+import { ZH_DEFAULT_VOICE, ZH_VOICES, isZhVoice } from './zhvoice.js';
 
 export const TTS_MODEL = 'onnx-community/Kokoro-82M-v1.0-ONNX';
 export const ASR_MODEL = 'onnx-community/whisper-base.en_timestamped';
+export const MULTILINGUAL_ASR_MODEL = 'onnx-community/whisper-small_timestamped';
 export const TTS_SAMPLE_RATE = 24000;
+
+export const LANGUAGES = {
+  en: 'af_heart', es: 'ef_dora', fr: 'ff_siwis', it: 'if_sara', 'pt-br': 'pf_dora', hi: 'hf_alpha', ja: 'jf_alpha', zh: 'zf_xiaobei', 'zh-TW': ZH_DEFAULT_VOICE,
+};
+
+export function voiceLanguage(id) {
+  if (typeof id !== 'string' || !id) return undefined;
+  if (isZhVoice(id)) return 'zh-TW';
+  return { a: 'en', b: 'en', e: 'es', f: 'fr', i: 'it', p: 'pt-br', h: 'hi', j: 'ja', z: 'zh' }[id[0]];
+}
+
+export function asrModel(language = 'en') {
+  return language === 'en' ? ASR_MODEL : MULTILINGUAL_ASR_MODEL;
+}
 
 export function cacheRoot() {
   return process.env.EXPLAINROO_CACHE || path.join(os.homedir(), '.cache', 'explainroo');
@@ -63,31 +78,35 @@ export function loadTTS({ log } = {}) {
   return ttsPromise;
 }
 
-let asrPromise = null;
-export function loadASR({ log } = {}) {
-  if (!asrPromise) {
-    asrPromise = (async () => {
+const asrPromises = new Map();
+export function loadASR({ log, language = 'en' } = {}) {
+  const model = asrModel(language);
+  if (!asrPromises.has(model)) {
+    asrPromises.set(model, (async () => {
       const { pipeline } = await lib();
-      return pipeline('automatic-speech-recognition', ASR_MODEL, {
+      return pipeline('automatic-speech-recognition', model, {
         dtype: 'q8',
         progress_callback: progressLogger('speech check model', log),
       });
-    })();
+    })());
   }
-  return asrPromise;
+  return asrPromises.get(model);
 }
 
 // samples: Float32Array at 16 kHz. Returns [{ text, start, end }].
-export async function transcribeWords(samples, { log } = {}) {
-  const asr = await loadASR({ log });
-  const r = await asr(samples, { return_timestamps: 'word', chunk_length_s: 30, stride_length_s: 5 });
+export async function transcribeWords(samples, { log, language = 'en' } = {}) {
+  const asr = await loadASR({ log, language });
+  const speechLanguage = language === 'pt-br' ? 'pt' : language === 'zh-TW' ? 'zh' : language;
+  const r = await asr(samples, { return_timestamps: 'word', chunk_length_s: 30, stride_length_s: 5,
+    ...(language === 'en' ? {} : { language: speechLanguage, task: 'transcribe' }),
+  });
   return {
     text: (r.text || '').trim(),
     words: (r.chunks || []).map((c) => ({ text: c.text.trim(), start: c.timestamp[0] ?? 0, end: c.timestamp[1] ?? c.timestamp[0] ?? 0 })),
   };
 }
 
-// Kokoro v1.0 English voices, then the Taiwan Mandarin ones.
+// Kokoro v1.0 voices for the supported languages.
 export const VOICES = {
   af_heart: 'American English, female (default)',
   af_bella: 'American English, female',
@@ -119,4 +138,30 @@ export const VOICES = {
   bm_daniel: 'British English, male',
   // Taiwan Mandarin voices (src/zhvoice.js).
   ...ZH_VOICES,
+  ef_dora: 'Spanish, female (default)',
+  em_alex: 'Spanish, male',
+  em_santa: 'Spanish, male',
+  ff_siwis: 'French, female (default)',
+  if_sara: 'Italian, female (default)',
+  im_nicola: 'Italian, male',
+  pf_dora: 'Brazilian Portuguese, female (default)',
+  pm_alex: 'Brazilian Portuguese, male',
+  pm_santa: 'Brazilian Portuguese, male',
+  hf_alpha: 'Hindi, female (default)',
+  hf_beta: 'Hindi, female',
+  hm_omega: 'Hindi, male',
+  hm_psi: 'Hindi, male',
+  jf_alpha: 'Japanese, female (default)',
+  jf_gongitsune: 'Japanese, female',
+  jf_nezumi: 'Japanese, female',
+  jf_tebukuro: 'Japanese, female',
+  jm_kumo: 'Japanese, male',
+  zf_xiaobei: 'Mandarin Chinese, female (default)',
+  zf_xiaoni: 'Mandarin Chinese, female',
+  zf_xiaoxiao: 'Mandarin Chinese, female',
+  zf_xiaoyi: 'Mandarin Chinese, female',
+  zm_yunjian: 'Mandarin Chinese, male',
+  zm_yunxi: 'Mandarin Chinese, male',
+  zm_yunxia: 'Mandarin Chinese, male',
+  zm_yunyang: 'Mandarin Chinese, male',
 };

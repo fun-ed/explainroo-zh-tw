@@ -1,6 +1,76 @@
 // Aligns the words we asked the voice model to say with the words Whisper
 // heard, so every script word gets a start and end time.
+import { createRequire } from 'node:module';
 import { normWord } from './script.js';
+import { japaneseReadings } from './phonemes.js';
+
+const require = createRequire(import.meta.url);
+
+// Whisper often writes Mandarin in Traditional characters, even when the
+// script is Simplified. Both sides are compared in Simplified.
+let toSimplified;
+function simplified(text) {
+  toSimplified ??= require('opencc-js/t2cn').Converter({ from: 'tw', to: 'cn' });
+  return toSimplified(text);
+}
+
+// Whisper also often writes another character with the same sound, like 直
+// for 值. Mandarin characters match when they share a reading without tones.
+const readings = new Map();
+function soundsAlike(a, b) {
+  const as = Array.from(a);
+  const bs = Array.from(b);
+  if (as.length !== bs.length) return false;
+  const { pinyin } = require('pinyin-pro');
+  const of = c => {
+    if (!readings.has(c)) readings.set(c, /\p{Script=Han}/u.test(c) ? pinyin(c, { multiple: true, toneType: 'none', type: 'array' }) : [c]);
+    return readings.get(c);
+  };
+  return as.every((c, i) => c === bs[i] || of(c).some(r => of(bs[i]).includes(r)));
+}
+
+const katakana = text => text.replace(/[\u3041-\u3096]/g, c => String.fromCharCode(c.charCodeAt(0) + 0x60));
+
+// Gives each piece of text the reading of its characters. A reading that
+// covers several characters is shared out between them.
+export function spreadReadings(pieces, tokens) {
+  const kana = Array.from(pieces.join(''), () => '');
+  for (const [start, end, reading] of tokens) {
+    const r = Array.from(katakana(reading));
+    const n = end - start;
+    for (let k = 0; k < n && start + k < kana.length; k++) kana[start + k] = r.slice(Math.round(k * r.length / n), Math.round((k + 1) * r.length / n)).join('');
+  }
+  let at = 0;
+  return pieces.map(p => {
+    const length = Array.from(p).length;
+    at += length;
+    return kana.slice(at - length, at).join('');
+  });
+}
+
+// Japanese has many words that sound the same, and Whisper often writes a
+// word in kana that the script writes in kanji. When Python with misaki is
+// there, both sides are compared by their reading.
+export async function readAlike(words, heard, language) {
+  if (language !== 'ja' || !words.length || !heard.length) return { words, heard };
+  try {
+    const spoken = words.map(w => String(w.spoken));
+    const pieces = heard.map(h => String(h.text).trim());
+    const shown = words.map((w, i) => w.display !== undefined && String(w.display) !== spoken[i] ? String(w.display) : null);
+    const extra = shown.filter(s => s !== null);
+    const [a, b, ...c] = await japaneseReadings([spoken.join(''), pieces.join(''), ...extra]);
+    const spokenKana = spreadReadings(spoken, a);
+    const heardKana = spreadReadings(pieces, b);
+    let k = 0;
+    const shownKana = shown.map(s => s === null ? null : spreadReadings([s], c[k++])[0]);
+    return {
+      words: words.map((w, i) => ({ ...w, spoken: spokenKana[i] || w.spoken, display: shown[i] === null ? undefined : shownKana[i] || w.display })),
+      heard: heard.map((h, i) => ({ ...h, text: heardKana[i] || h.text })),
+    };
+  } catch {
+    return { words, heard };
+  }
+}
 
 const NUMBER_WORDS = {
   zero: '0', one: '1', two: '2', three: '3', four: '4', five: '5', six: '6', seven: '7', eight: '8', nine: '9',
@@ -31,18 +101,49 @@ export function intWords(n) {
   return [String(n)];
 }
 
+// Kokoro reads a lone four-digit number like a year: 1582 "fifteen eighty
+// two", 1900 "nineteen hundred", 1905 "nineteen oh five". Numbers below 1100
+// or with fewer than ten in the last three digits (2000, 2005) stay cardinal.
+export function yearWords(n) {
+  if (n < 1100 || n > 9999 || n % 1000 < 10) return null;
+  const hi = Math.floor(n / 100);
+  const lo = n % 100;
+  if (n % 1000 >= 100 && lo === 0) return [...intWords(hi), 'hundred'];
+  if (n % 1000 >= 100 && lo < 10) return [...intWords(hi), 'oh', ...intWords(lo)];
+  return [...intWords(hi), ...intWords(lo)];
+}
+
+const ORDINALS = { one: 'first', two: 'second', three: 'third', five: 'fifth', eight: 'eighth', nine: 'ninth', twelve: 'twelfth' };
+
+// 29th -> twenty ninth, 101st -> one hundred first.
+function ordinalWords(n) {
+  const words = intWords(n);
+  const last = words.pop();
+  const ord = ORDINALS[last] ?? (last.endsWith('y') ? last.slice(0, -1) + 'ieth' : last + 'th');
+  return [...words.map(canon), ord];
+}
+
 // Turns one written word into the tokens a voice would say, in canonical form.
 // Whisper writes "$1,050" and "5%" where the voice said "one thousand and
 // fifty dollars" and "five percent", and "example.com" or "1.1.1.1" where it
 // said words joined by "dot". Both sides are expanded the same way.
-export function expand(word) {
+export function expand(word, language = 'en') {
+  if (language !== 'en') {
+    const n = normWord(word).replace(/[०-९]/g, d => String(d.charCodeAt(0) - 0x0966));
+    const digits = /^[\p{N}%$€£+.]+$/u.test(n) ? n.replace(/[^\p{N}]/gu, '') : '';
+    return n ? [digits || n] : [];
+  }
   const raw = String(word).trim().toLowerCase();
   // Whisper splits "1.1.1.1" into "1", ".1", ".1", ".1": a leading dot is a spoken "dot".
   const lead = /^\.[a-z0-9]/i.test(raw) ? ['dot'] : [];
   const n = canon(word);
+  const ordinal = /^(\d+)(st|nd|rd|th)$/.exec(n);
+  if (ordinal && !/\d,\d/.test(raw)) return [...lead, ...ordinalWords(Number(ordinal[1]))];
   const money = /^([$€£])?(\d+)(?:\.(\d+))?(%)?$/.exec(n);
   if (money && /\d/.test(raw) && !/^\d+\.\d+\.\d+/.test(n)) {
     const [, cur, int, dec, pct] = money;
+    const year = !cur && dec === undefined && !pct && /^\d{4}$/.test(int) && !/\d,\d/.test(raw) ? yearWords(Number(int)) : null;
+    if (year) return [...lead, ...year].map(canon);
     const out = [...lead, ...intWords(Number(int))];
     if (dec !== undefined) {
       if (cur) out.push(CURRENCY[cur], ...intWords(Number(dec)), 'cents');
@@ -88,18 +189,28 @@ export function similar(a, b) {
   return editDistance(a, b) / len <= 0.34;
 }
 
-// words: [{ spoken }] in order. heard: [{ text, start, end }] from Whisper.
+// words: [{ spoken, display? }] in order. heard: [{ text, start, end }] from Whisper.
 // Returns per-word { start, end, matched } and the share of spoken tokens matched.
-export function alignWords(words, heard, duration) {
+// A word also counts as heard when Whisper writes its shown form, so
+// {SQL|sequel} or {async|a sink} is confirmed by "SQL" or "async".
+export function alignWords(words, heard, duration, language = 'en') {
+  const cjk = ['ja', 'zh'].includes(language);
+  const chars = word => normWord(word).normalize('NFC');
+  const partsOf = word => cjk ? Array.from(language === 'zh' ? simplified(chars(word)) : chars(word)) : expand(word, language);
+  const same = (a, b) => a === b || (language === 'zh' && soundsAlike(a, b));
+  const matches = (a, b) => cjk ? same(a, b) : language !== 'en' && (/\p{N}/u.test(a) || /\p{N}/u.test(b)) ? a === b : similar(a, b);
   const tokens = [];
   words.forEach((w, wi) => {
-    const parts = String(w.spoken).split(/\s+/).flatMap(expand);
+    const parts = String(w.spoken).split(/\s+/).flatMap(partsOf);
     (parts.length ? parts : ['']).forEach((p, k) => {
       // "and" inside a spoken number ("one thousand and fifty") is optional.
       const prev = tokens[tokens.length - 1];
-      const optional = p === 'and' && prev && isNumberToken(prev.norm);
+      const optional = language === 'en' && p === 'and' && prev && isNumberToken(prev.norm);
       tokens.push({ wi, norm: p, first: k === 0, last: k === parts.length - 1 || !parts.length, optional });
     });
+    const shown = w.display === undefined ? '' : String(w.display).split(/\s+/).flatMap(partsOf).join('');
+    const first = tokens.findIndex((t) => t.wi === wi);
+    if (shown && shown !== parts.join('')) tokens[first].shown = shown;
   });
   // Whisper splits numbers into pieces ("$1", ",000" and "5", "%" and "1",
   // ".1"). Join them back before comparing.
@@ -117,7 +228,7 @@ export function alignWords(words, heard, duration) {
   }
   const H = [];
   for (const h of joined) {
-    const parts = expand(h.text);
+    const parts = partsOf(h.text);
     const step = (h.end - h.start) / Math.max(1, parts.length);
     parts.forEach((p, k) => H.push({ text: p, norm: p, start: h.start + k * step, end: h.start + (k + 1) * step }));
   }
@@ -130,6 +241,7 @@ export function alignWords(words, heard, duration) {
   const INF = 1e9;
   const cost = Array.from({ length: T + 1 }, () => new Float64Array(N + 1).fill(INF));
   const move = Array.from({ length: T + 1 }, () => new Int8Array(N + 1));
+  const shownLength = cjk ? Array.from({ length: T + 1 }, () => new Int32Array(N + 1)) : null;
   cost[0][0] = 0;
   const groupEnd = new Int32Array(T);
   for (let i = 0; i < T; i++) {
@@ -144,16 +256,26 @@ export function alignWords(words, heard, duration) {
       if (i < T && c + (tokens[i].optional ? 0 : 1) < cost[i + 1][j]) { cost[i + 1][j] = c + (tokens[i].optional ? 0 : 1); move[i + 1][j] = 2; }
       if (j < N && c + 1 < cost[i][j + 1]) { cost[i][j + 1] = c + 1; move[i][j + 1] = 3; }
       if (i < T && j < N) {
-        const ok = similar(tokens[i].norm, H[j].norm);
+        const ok = matches(tokens[i].norm, H[j].norm);
         const v = c + (ok ? 0 : 1.6);
         if (v < cost[i + 1][j + 1]) { cost[i + 1][j + 1] = v; move[i + 1][j + 1] = ok ? 1 : 4; }
       }
-      if (i < T && j < N && tokens[i].first && groupEnd[i] > i) {
+      if (i < T && j < N && tokens[i].first && (groupEnd[i] > i || tokens[i].shown)) {
         const e = groupEnd[i];
         const joined = tokens.slice(i, e + 1).map((t) => t.norm).join('');
-        if (similar(joined, H[j].norm) && c < cost[e + 1][j + 1]) { cost[e + 1][j + 1] = c; move[e + 1][j + 1] = 5; }
+        const ok = (groupEnd[i] > i && matches(joined, H[j].norm)) || (tokens[i].shown && matches(tokens[i].shown, H[j].norm));
+        if (ok && c < cost[e + 1][j + 1]) { cost[e + 1][j + 1] = c; move[e + 1][j + 1] = 5; }
       }
-      if (i < T && j + 1 < N && similar(tokens[i].norm, H[j].norm + H[j + 1].norm) && c < cost[i + 1][j + 2]) {
+      if (cjk && i < T && tokens[i].first && tokens[i].shown) {
+        const length = Array.from(tokens[i].shown).length;
+        const e = groupEnd[i];
+        if (j + length <= N && same(tokens[i].shown, H.slice(j, j + length).map(h => h.norm).join('')) && c < cost[e + 1][j + length]) {
+          cost[e + 1][j + length] = c;
+          move[e + 1][j + length] = 7;
+          shownLength[e + 1][j + length] = length;
+        }
+      }
+      if (i < T && j + 1 < N && matches(tokens[i].norm, H[j].norm + H[j + 1].norm) && c < cost[i + 1][j + 2]) {
         cost[i + 1][j + 2] = c;
         move[i + 1][j + 2] = 6;
       }
@@ -185,6 +307,14 @@ export function alignWords(words, heard, duration) {
       matched += i - s;
       i = s;
       j--;
+    } else if (m === 7) {
+      const length = shownLength[i][j];
+      let s = i - 1;
+      while (s > 0 && tokens[s - 1].wi === tokens[i - 1].wi) s--;
+      add(tokens[i - 1].wi, H[j - length].start, H[j - 1].end, i - s);
+      matched += i - s;
+      i = s;
+      j -= length;
     } else if (m === 6) { add(tokens[i - 1].wi, H[j - 2].start, H[j - 1].end); matched++; i--; j -= 2; }
     else break;
   }

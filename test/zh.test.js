@@ -8,13 +8,13 @@ import { parseRich } from '../engine/text.js';
 import { buildPhrases } from '../engine/captions.js';
 
 test('Chinese narration is split per character and joined without spaces', () => {
-  const sc = parseScript('## a\n接著 [#two] 跟它要網頁。[en: Then it asks.] 叫做 {Duga|杜加}雷達，很大。\n').scenes[0];
+  const sc = parseScript('## a\n接著 [#two] 跟它要網頁。[en: Then it asks.] 叫做 {Duga|杜加}雷達，很大。\n', { language: 'zh-TW' }).scenes[0];
   const words = sc.units.filter((u) => u.type === 'word');
   assert.deepEqual(words.map((w) => w.display), ['接', '著', '跟', '它', '要', '網', '頁。', '叫', '做', 'Duga', '雷', '達，', '很', '大。']);
   assert.equal(words[2].space, false, 'a space around a marker between Chinese characters is no gap');
   assert.equal(words[9].space, true, 'Latin words keep their spaces');
   assert.deepEqual(sc.subs, { 0: 'Then it asks.' });
-  assert.deepEqual(speechChunks(sc.units).map((c) => c.text), ['接著跟它要網頁。', '叫做 杜加雷達，很大。']);
+  assert.deepEqual(speechChunks(sc.units, { language: 'zh-TW' }).map((c) => c.text), ['接著跟它要網頁。', '叫做 杜加雷達，很大。']);
 });
 
 test('cues and text layout work on Chinese', () => {
@@ -36,7 +36,7 @@ test('voice word boundaries give every character a time', () => {
 });
 
 test('captions drop Chinese commas and carry the English line', () => {
-  const tl = { scenes: [{ start: 0, subs: { 0: 'Hi there.' }, words: [['你', 0], ['好，', 0.2], ['世', 0.4], ['界。', 0.6]].map(([text, start]) => ({ text, start, end: start + 0.2, space: false, sent: 0 })) }] };
+  const tl = { language: 'zh-TW', scenes: [{ start: 0, subs: { 0: 'Hi there.' }, words: [['你', 0], ['好，', 0.2], ['世', 0.4], ['界。', 0.6]].map(([text, start]) => ({ text, start, end: start + 0.2, space: false, sent: 0 })) }] };
   const [ph] = buildPhrases(tl, 46);
   assert.equal(ph.en, 'Hi there.');
   assert.equal(ph.words.length, 4);
@@ -58,9 +58,9 @@ test('pitch is a zh-TW voice setting in Hz', async () => {
 });
 
 test('a trailing-off …… pauses longer and keeps the English line on its sentence', () => {
-  const sc = parseScript('## a\n這個……其實很簡單。[en: This is simple.] 結果——它爆炸了。\n').scenes[0];
+  const sc = parseScript('## a\n這個……其實很簡單。[en: This is simple.] 結果——它爆炸了。\n', { language: 'zh-TW' }).scenes[0];
   assert.deepEqual(sc.subs, { 0: 'This is simple.' });
-  const chunks = speechChunks(sc.units, { sentenceGap: 0.3 });
+  const chunks = speechChunks(sc.units, { sentenceGap: 0.3, language: 'zh-TW' });
   assert.deepEqual(chunks.map((c) => [c.gapBefore, c.text]), [[0, '這個……'], [0.5, '其實很簡單。'], [0.3, '結果——它爆炸了。']]);
 });
 

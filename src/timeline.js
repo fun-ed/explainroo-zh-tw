@@ -43,6 +43,7 @@ export function buildTimeline(project, voices) {
   });
   return {
     fps,
+    ...(['ja', 'zh', 'zh-TW'].includes(config.language) ? { language: config.language } : {}),
     width: config.width,
     height: config.height,
     duration: snap(t),
